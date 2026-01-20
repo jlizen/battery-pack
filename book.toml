@@ -1,0 +1,5 @@
+[book]
+title = "Battery Pack"
+authors = ["Niko Matsakis"]
+language = "en"
+src = "md"
