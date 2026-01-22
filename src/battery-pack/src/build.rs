@@ -58,17 +58,102 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+// ============================================================================
+// Manifest types for deserialization
+// ============================================================================
+
+/// Parsed Cargo.toml manifest (only the fields we care about)
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct Manifest {
+    pub package: PackageSection,
+    pub dependencies: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct PackageSection {
+    pub metadata: Option<PackageMetadata>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct PackageMetadata {
+    pub battery: Option<BatteryConfig>,
+}
+
+/// The [package.metadata.battery] configuration
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct BatteryConfig {
+    #[allow(dead_code)]
+    pub schema_version: Option<u32>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    pub root: Option<ExportConfig>,
+    #[serde(default)]
+    pub modules: BTreeMap<String, ExportConfig>,
+}
+
+/// Configuration for what to export - can be a list of crates or detailed per-crate config
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum ExportConfig {
+    /// Simple list: ["tokio", "serde"]
+    CrateList(Vec<String>),
+    /// Detailed config: { tokio = "*", serde = ["Serialize", "Deserialize"] }
+    Detailed(BTreeMap<String, CrateExportConfig>),
+}
+
+/// How to export a specific crate.
+///
+/// Can be:
+/// - A single item: `"spawn"` or `"*"`
+/// - Multiple items: `["spawn", "select"]` or `["*"]`
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum CrateExportConfig {
+    /// Single item: "spawn" or "*"
+    Single(String),
+    /// Multiple items: ["Serialize", "Deserialize"] or ["*"]
+    Items(Vec<String>),
+}
+
+impl CrateExportConfig {
+    /// Get all items to export, normalizing single to a one-element list.
+    fn items(&self) -> Vec<&str> {
+        match self {
+            CrateExportConfig::Single(s) => vec![s.as_str()],
+            CrateExportConfig::Items(items) => items.iter().map(|s| s.as_str()).collect(),
+        }
+    }
+
+    /// Check if this is a glob export (contains "*").
+    fn is_glob(&self) -> bool {
+        self.items().contains(&"*")
+    }
+}
+
+// ============================================================================
+// Cargo metadata types
+// ============================================================================
+
 /// Subset of cargo metadata we care about
 #[derive(Deserialize)]
 struct CargoMetadata {
-    packages: Vec<Package>,
+    packages: Vec<CargoPackage>,
 }
 
 #[derive(Deserialize)]
-struct Package {
+struct CargoPackage {
     name: String,
     manifest_path: String,
-    metadata: Option<toml::Value>,
+    metadata: Option<CargoPackageMetadata>,
+}
+
+#[derive(Deserialize)]
+struct CargoPackageMetadata {
+    battery: Option<toml::Value>,
 }
 
 // ============================================================================
@@ -89,7 +174,7 @@ pub fn generate_facade() -> Result<(), Error> {
     let out_path = Path::new(&out_dir).join("facade.rs");
 
     let manifest_content = fs::read_to_string(&manifest_path)?;
-    let manifest: toml::Value = toml::from_str(&manifest_content)?;
+    let manifest: Manifest = toml::from_str(&manifest_content)?;
 
     // Get cargo metadata to find battery pack dependencies
     let cargo_metadata = get_cargo_metadata(&manifest_dir)?;
@@ -128,23 +213,17 @@ fn get_cargo_metadata(manifest_dir: &str) -> Result<CargoMetadata, Error> {
 /// Find dependencies that are battery packs.
 /// Returns a map of crate name -> manifest path for battery pack deps.
 fn find_battery_pack_manifests(
-    manifest: &toml::Value,
+    manifest: &Manifest,
     metadata: &CargoMetadata,
 ) -> BTreeMap<String, String> {
     let mut battery_packs = BTreeMap::new();
 
-    // Get our direct dependencies
-    let deps: HashSet<String> = manifest
-        .get("dependencies")
-        .and_then(|d| d.as_table())
-        .map(|t| t.keys().cloned().collect())
-        .unwrap_or_default();
+    let deps: HashSet<&String> = manifest.dependencies.keys().collect();
 
-    // Check each package in metadata to see if it's a battery pack
     for package in &metadata.packages {
         if deps.contains(&package.name) {
             if let Some(ref pkg_metadata) = package.metadata {
-                if pkg_metadata.get("battery").is_some() {
+                if pkg_metadata.battery.is_some() {
                     battery_packs.insert(package.name.clone(), package.manifest_path.clone());
                 }
             }
@@ -162,7 +241,7 @@ fn find_battery_pack_manifests(
 /// This abstraction allows testing without filesystem access.
 pub trait BatteryPackResolver {
     /// If the crate is a battery pack, return its parsed manifest.
-    fn resolve(&self, crate_name: &str) -> Option<toml::Value>;
+    fn resolve(&self, crate_name: &str) -> Option<Manifest>;
 }
 
 /// Resolver that reads manifests from the filesystem (used in real builds).
@@ -171,7 +250,7 @@ pub struct FileSystemResolver<'a> {
 }
 
 impl BatteryPackResolver for FileSystemResolver<'_> {
-    fn resolve(&self, crate_name: &str) -> Option<toml::Value> {
+    fn resolve(&self, crate_name: &str) -> Option<Manifest> {
         let path = self.battery_pack_paths.get(crate_name)?;
         let content = fs::read_to_string(path).ok()?;
         toml::from_str(&content).ok()
@@ -180,7 +259,7 @@ impl BatteryPackResolver for FileSystemResolver<'_> {
 
 /// Resolver backed by in-memory manifests (used in tests).
 pub struct InMemoryResolver {
-    manifests: BTreeMap<String, toml::Value>,
+    manifests: BTreeMap<String, Manifest>,
 }
 
 impl InMemoryResolver {
@@ -191,7 +270,7 @@ impl InMemoryResolver {
     }
 
     pub fn add(&mut self, crate_name: &str, manifest_toml: &str) {
-        let manifest: toml::Value = toml::from_str(manifest_toml).expect("invalid test manifest");
+        let manifest: Manifest = toml::from_str(manifest_toml).expect("invalid test manifest");
         self.manifests.insert(crate_name.to_string(), manifest);
     }
 }
@@ -203,20 +282,45 @@ impl Default for InMemoryResolver {
 }
 
 impl BatteryPackResolver for InMemoryResolver {
-    fn resolve(&self, crate_name: &str) -> Option<toml::Value> {
+    fn resolve(&self, crate_name: &str) -> Option<Manifest> {
         self.manifests.get(crate_name).cloned()
+    }
+}
+
+// Need Clone for InMemoryResolver
+impl Clone for Manifest {
+    fn clone(&self) -> Self {
+        Self {
+            package: PackageSection {
+                metadata: self.package.metadata.as_ref().map(|m| PackageMetadata {
+                    battery: m.battery.clone(),
+                }),
+            },
+            dependencies: self.dependencies.clone(),
+        }
+    }
+}
+
+impl Clone for BatteryConfig {
+    fn clone(&self) -> Self {
+        Self {
+            schema_version: self.schema_version,
+            exclude: self.exclude.clone(),
+            root: self.root.clone(),
+            modules: self.modules.clone(),
+        }
     }
 }
 
 /// Facade code generator. Separates generation logic from I/O.
 pub struct FacadeGenerator<'a, R: BatteryPackResolver = FileSystemResolver<'a>> {
-    manifest: &'a toml::Value,
+    manifest: &'a Manifest,
     resolver: R,
 }
 
 impl<'a> FacadeGenerator<'a, FileSystemResolver<'a>> {
     /// Create a generator using filesystem-based battery pack resolution.
-    pub fn new(manifest: &'a toml::Value, battery_pack_paths: &'a BTreeMap<String, String>) -> Self {
+    pub fn new(manifest: &'a Manifest, battery_pack_paths: &'a BTreeMap<String, String>) -> Self {
         Self {
             manifest,
             resolver: FileSystemResolver { battery_pack_paths },
@@ -226,7 +330,7 @@ impl<'a> FacadeGenerator<'a, FileSystemResolver<'a>> {
 
 impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
     /// Create a generator with a custom resolver (for testing).
-    pub fn with_resolver(manifest: &'a toml::Value, resolver: R) -> Self {
+    pub fn with_resolver(manifest: &'a Manifest, resolver: R) -> Self {
         Self { manifest, resolver }
     }
 
@@ -237,27 +341,32 @@ impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
 
         let battery = self
             .manifest
-            .get("package")
-            .and_then(|p| p.get("metadata"))
-            .and_then(|m| m.get("battery"));
+            .package
+            .metadata
+            .as_ref()
+            .and_then(|m| m.battery.as_ref());
 
         let exclude = self.get_exclude_set(battery);
         let deps = self.get_dependencies();
-        let root_config = battery.and_then(|b| b.get("root"));
-        let modules_config = battery.and_then(|b| b.get("modules"));
+
+        let root_config = battery.and_then(|b| b.root.as_ref());
+        let modules_config = battery.map(|b| &b.modules);
 
         // Handle explicit root exports
         if let Some(root) = root_config {
-            self.generate_root_exports(&mut code, root, &exclude);
+            self.generate_exports(&mut code, root, &exclude, "");
         }
 
         // Handle module exports
         if let Some(modules) = modules_config {
-            self.generate_module_exports(&mut code, modules, &exclude);
+            if !modules.is_empty() {
+                self.generate_module_exports(&mut code, modules, &exclude);
+            }
         }
 
         // If no explicit configuration, export all deps at root
-        let has_explicit_config = root_config.is_some() || modules_config.is_some();
+        let has_explicit_config =
+            root_config.is_some() || modules_config.is_some_and(|m| !m.is_empty());
         if !has_explicit_config {
             for dep in &deps {
                 if !exclude.contains(dep) {
@@ -269,15 +378,9 @@ impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
         code
     }
 
-    fn get_exclude_set(&self, battery: Option<&toml::Value>) -> HashSet<String> {
+    fn get_exclude_set(&self, battery: Option<&BatteryConfig>) -> HashSet<String> {
         let mut exclude: HashSet<String> = battery
-            .and_then(|b| b.get("exclude"))
-            .and_then(|e| e.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
+            .map(|b| b.exclude.iter().cloned().collect())
             .unwrap_or_default();
 
         // Always exclude battery-pack itself
@@ -286,126 +389,65 @@ impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
     }
 
     fn get_dependencies(&self) -> Vec<String> {
-        let mut deps: Vec<String> = self
-            .manifest
-            .get("dependencies")
-            .and_then(|d| d.as_table())
-            .map(|t| t.keys().cloned().collect())
-            .unwrap_or_default();
+        let mut deps: Vec<String> = self.manifest.dependencies.keys().cloned().collect();
         deps.sort();
         deps
     }
 
-    fn generate_root_exports(
+    fn generate_exports(
         &self,
         code: &mut String,
-        root: &toml::Value,
+        config: &ExportConfig,
         exclude: &HashSet<String>,
+        indent: &str,
     ) {
-        match root {
-            // root = ["tokio", "serde"]
-            toml::Value::Array(arr) => {
-                for item in arr {
-                    if let Some(crate_name) = item.as_str() {
-                        if !exclude.contains(crate_name) {
-                            code.push_str(&self.generate_dep_export(crate_name, ""));
-                        }
+        match config {
+            ExportConfig::CrateList(crates) => {
+                for crate_name in crates {
+                    if !exclude.contains(crate_name) {
+                        code.push_str(&self.generate_dep_export(crate_name, indent));
                     }
                 }
             }
-            // root = { tokio = "*" } or root = { tokio = ["spawn", "select"] }
-            toml::Value::Table(table) => {
-                let mut entries: Vec<_> = table.iter().collect();
-                entries.sort_by_key(|(k, _)| *k);
-                for (crate_name, config) in entries {
+            ExportConfig::Detailed(detailed) => {
+                for (crate_name, crate_config) in detailed {
                     if !exclude.contains(crate_name) {
                         let ident = crate_name.replace('-', "_");
-                        match config {
-                            toml::Value::String(s) if s == "*" => {
-                                code.push_str(&format!("pub use {}::*;\n", ident));
+                        if crate_config.is_glob() {
+                            code.push_str(&format!("{}pub use {}::*;\n", indent, ident));
+                        } else {
+                            let items = crate_config.items();
+                            if !items.is_empty() {
+                                code.push_str(&format!(
+                                    "{}pub use {}::{{{}}};\n",
+                                    indent,
+                                    ident,
+                                    items.join(", ")
+                                ));
                             }
-                            toml::Value::Array(items) => {
-                                let item_strs: Vec<&str> =
-                                    items.iter().filter_map(|v| v.as_str()).collect();
-                                if !item_strs.is_empty() {
-                                    code.push_str(&format!(
-                                        "pub use {}::{{{}}};\n",
-                                        ident,
-                                        item_strs.join(", ")
-                                    ));
-                                }
-                            }
-                            _ => {}
                         }
                     }
                 }
             }
-            _ => {}
         }
     }
 
     fn generate_module_exports(
         &self,
         code: &mut String,
-        modules: &toml::Value,
+        modules: &BTreeMap<String, ExportConfig>,
         exclude: &HashSet<String>,
     ) {
-        if let Some(modules_table) = modules.as_table() {
-            let mut entries: Vec<_> = modules_table.iter().collect();
-            entries.sort_by_key(|(k, _)| *k);
+        for (module_name, module_config) in modules {
+            let mod_ident = if is_rust_keyword(module_name) {
+                format!("r#{}", module_name)
+            } else {
+                module_name.clone()
+            };
 
-            for (module_name, module_config) in entries {
-                let mod_ident = if is_rust_keyword(module_name) {
-                    format!("r#{}", module_name)
-                } else {
-                    module_name.clone()
-                };
-
-                code.push_str(&format!("\npub mod {} {{\n", mod_ident));
-
-                match module_config {
-                    // modules.http = ["reqwest", "tower"]
-                    toml::Value::Array(arr) => {
-                        for item in arr {
-                            if let Some(crate_name) = item.as_str() {
-                                if !exclude.contains(crate_name) {
-                                    code.push_str(&self.generate_dep_export(crate_name, "    "));
-                                }
-                            }
-                        }
-                    }
-                    // modules.http = { reqwest = "*" }
-                    toml::Value::Table(table) => {
-                        let mut entries: Vec<_> = table.iter().collect();
-                        entries.sort_by_key(|(k, _)| *k);
-                        for (crate_name, config) in entries {
-                            if !exclude.contains(crate_name) {
-                                let ident = crate_name.replace('-', "_");
-                                match config {
-                                    toml::Value::String(s) if s == "*" => {
-                                        code.push_str(&format!("    pub use {}::*;\n", ident));
-                                    }
-                                    toml::Value::Array(items) => {
-                                        let item_strs: Vec<&str> =
-                                            items.iter().filter_map(|v| v.as_str()).collect();
-                                        if !item_strs.is_empty() {
-                                            code.push_str(&format!(
-                                                "    pub use {}::{{{}}};\n",
-                                                ident,
-                                                item_strs.join(", ")
-                                            ));
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-
-                code.push_str("}\n");
-            }
+            code.push_str(&format!("\npub mod {} {{\n", mod_ident));
+            self.generate_exports(code, module_config, exclude, "    ");
+            code.push_str("}\n");
         }
     }
 
@@ -427,31 +469,22 @@ impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
     fn generate_battery_pack_reexport(
         &self,
         bp_ident: &str,
-        bp_manifest: &toml::Value,
+        bp_manifest: &Manifest,
         indent: &str,
     ) -> String {
         let mut code = String::new();
 
-        let mut bp_deps: Vec<String> = bp_manifest
-            .get("dependencies")
-            .and_then(|d| d.as_table())
-            .map(|t| t.keys().cloned().collect())
-            .unwrap_or_default();
+        let mut bp_deps: Vec<String> = bp_manifest.dependencies.keys().cloned().collect();
         bp_deps.sort();
 
         let bp_battery = bp_manifest
-            .get("package")
-            .and_then(|p| p.get("metadata"))
-            .and_then(|m| m.get("battery"));
+            .package
+            .metadata
+            .as_ref()
+            .and_then(|m| m.battery.as_ref());
 
         let mut bp_exclude: HashSet<String> = bp_battery
-            .and_then(|b| b.get("exclude"))
-            .and_then(|e| e.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
+            .map(|b| b.exclude.iter().cloned().collect())
             .unwrap_or_default();
         bp_exclude.insert("battery-pack".to_string());
 
@@ -515,7 +548,7 @@ mod tests {
     use expect_test::{expect, Expect};
 
     fn check(manifest_toml: &str, resolver: InMemoryResolver, expect: Expect) {
-        let manifest: toml::Value = toml::from_str(manifest_toml).unwrap();
+        let manifest: Manifest = toml::from_str(manifest_toml).unwrap();
         let generator = FacadeGenerator::with_resolver(&manifest, resolver);
         let actual = generator.generate();
         expect.assert_eq(&actual);
@@ -830,6 +863,56 @@ mod tests {
                 // Auto-generated by battery-pack. Do not edit.
 
                 pub use tokio;
+            "#]],
+        );
+    }
+
+    #[test]
+    fn test_single_item_string() {
+        // tokio = "spawn" should be equivalent to tokio = ["spawn"]
+        check(
+            r#"
+            [package]
+            name = "my-battery"
+            version = "0.1.0"
+
+            [package.metadata.battery]
+            schema_version = 1
+
+            [package.metadata.battery.root]
+            tokio = "spawn"
+            serde = "Serialize"
+            "#,
+            InMemoryResolver::new(),
+            expect![[r#"
+                // Auto-generated by battery-pack. Do not edit.
+
+                pub use serde::{Serialize};
+                pub use tokio::{spawn};
+            "#]],
+        );
+    }
+
+    #[test]
+    fn test_glob_in_array() {
+        // tokio = ["*"] should work the same as tokio = "*"
+        check(
+            r#"
+            [package]
+            name = "my-battery"
+            version = "0.1.0"
+
+            [package.metadata.battery]
+            schema_version = 1
+
+            [package.metadata.battery.root]
+            tokio = ["*"]
+            "#,
+            InMemoryResolver::new(),
+            expect![[r#"
+                // Auto-generated by battery-pack. Do not edit.
+
+                pub use tokio::*;
             "#]],
         );
     }
