@@ -196,7 +196,7 @@ pub fn generate_facade() -> Result<(), Error> {
 
 fn get_cargo_metadata(manifest_dir: &str) -> Result<CargoMetadata, Error> {
     let output = Command::new("cargo")
-        .args(["metadata", "--format-version=1", "--no-deps"])
+        .args(["metadata", "--format-version=1"])
         .current_dir(manifest_dir)
         .output()?;
 
