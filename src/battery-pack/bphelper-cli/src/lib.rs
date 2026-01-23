@@ -3,10 +3,14 @@
 use anyhow::{bail, Context, Result};
 use cargo_generate::{GenerateArgs, TemplatePath, Vcs};
 use clap::{Parser, Subcommand};
+use flate2::read::GzDecoder;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::path::Path;
+use tar::Archive;
 
 const CRATES_IO_API: &str = "https://crates.io/api/v1/crates";
+const CRATES_IO_CDN: &str = "https://static.crates.io/crates";
 
 #[derive(Parser)]
 #[command(name = "cargo-bp")]
@@ -30,23 +34,23 @@ pub enum Commands {
 pub enum BpCommands {
     /// Create a new project from a battery pack template
     New {
-        /// Name of the battery pack to use as template source
+        /// Name of the battery pack (e.g., "cli" resolves to "cli-battery-pack")
         battery_pack: String,
 
         /// Name for the new project (prompted interactively if not provided)
         #[arg(long, short = 'n')]
         name: Option<String>,
 
-        /// Which template to use (defaults to 'default', or prompts if multiple available)
+        /// Which template to use (defaults to first available, or prompts if multiple)
         #[arg(long, short = 't')]
         template: Option<String>,
 
-        /// Override the git repository (for development/testing)
-        #[arg(long, hide = true)]
-        git: Option<String>,
+        /// Use exact crate name without adding "-battery-pack" suffix
+        #[arg(long)]
+        exact: bool,
 
-        /// Override with a local path (for development/testing)
-        #[arg(long, hide = true)]
+        /// Use a local path instead of downloading from crates.io
+        #[arg(long)]
         path: Option<String>,
     },
 
@@ -71,9 +75,9 @@ pub fn main() -> Result<()> {
                 battery_pack,
                 name,
                 template,
-                git,
+                exact,
                 path,
-            } => new_from_battery_pack(&battery_pack, name, template, git, path),
+            } => new_from_battery_pack(&battery_pack, name, template, exact, path),
             BpCommands::Add {
                 battery_pack,
                 features,
@@ -88,13 +92,13 @@ pub fn main() -> Result<()> {
 
 #[derive(Deserialize)]
 struct CratesIoResponse {
-    #[serde(rename = "crate")]
-    krate: CrateInfo,
+    versions: Vec<VersionInfo>,
 }
 
 #[derive(Deserialize)]
-struct CrateInfo {
-    repository: Option<String>,
+struct VersionInfo {
+    num: String,
+    yanked: bool,
 }
 
 // ============================================================================
@@ -137,50 +141,58 @@ fn new_from_battery_pack(
     battery_pack: &str,
     name: Option<String>,
     template: Option<String>,
-    git_override: Option<String>,
+    exact: bool,
     path_override: Option<String>,
 ) -> Result<()> {
-    // Get the repository URL
-    let repo_url = if let Some(path) = path_override {
-        return generate_from_local(&path, battery_pack, name, template);
-    } else if let Some(git) = git_override {
-        git
+    // If using local path, generate directly from there
+    if let Some(path) = path_override {
+        return generate_from_local(&path, name, template);
+    }
+
+    // Resolve the crate name (add -battery-pack suffix unless --exact)
+    let crate_name = if exact || battery_pack.ends_with("-battery-pack") {
+        battery_pack.to_string()
     } else {
-        resolve_battery_pack(battery_pack)?.repository
+        format!("{}-battery-pack", battery_pack)
     };
 
-    // Fetch the Cargo.toml from the repo to get template metadata
-    let templates = fetch_template_metadata(&repo_url, battery_pack)?;
+    // Look up the crate on crates.io and get the latest version
+    let crate_info = lookup_crate(&crate_name)?;
+
+    // Download and extract the crate to a temp directory
+    let temp_dir = download_and_extract_crate(&crate_name, &crate_info.version)?;
+    let crate_dir = temp_dir.path().join(format!("{}-{}", crate_name, crate_info.version));
+
+    // Read template metadata from the extracted Cargo.toml
+    let manifest_path = crate_dir.join("Cargo.toml");
+    let manifest_content = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+    let templates = parse_template_metadata(&manifest_content, &crate_name)?;
 
     // Resolve which template to use
     let template_path = resolve_template(&templates, template.as_deref())?;
 
-    // Generate the project
-    let args = GenerateArgs {
-        template_path: TemplatePath {
-            git: Some(repo_url),
-            auto_path: Some(template_path),
-            ..Default::default()
-        },
-        name,
-        vcs: Some(Vcs::Git),
-        ..Default::default()
-    };
-
-    cargo_generate::generate(args)?;
-
-    Ok(())
+    // Generate the project from the extracted crate
+    generate_from_path(&crate_dir, &template_path, name)
 }
 
 fn add_battery_pack(name: &str, features: &[String]) -> Result<()> {
-    let resolved = resolve_battery_pack(name)?;
+    // Resolve the crate name (add -battery-pack suffix if needed)
+    let crate_name = if name.ends_with("-battery-pack") {
+        name.to_string()
+    } else {
+        format!("{}-battery-pack", name)
+    };
+
+    // Verify the crate exists on crates.io
+    lookup_crate(&crate_name)?;
 
     // Build cargo add command: cargo add cli-battery-pack --rename cli
     let mut cmd = std::process::Command::new("cargo");
-    cmd.arg("add").arg(&resolved.crate_name);
+    cmd.arg("add").arg(&crate_name);
 
     // Rename to the short name (e.g., cli-battery-pack -> cli)
-    if resolved.crate_name != name {
+    if crate_name != name {
         cmd.arg("--rename").arg(name);
     }
 
@@ -200,22 +212,31 @@ fn add_battery_pack(name: &str, features: &[String]) -> Result<()> {
 
 fn generate_from_local(
     local_path: &str,
-    battery_pack: &str,
     name: Option<String>,
     template: Option<String>,
 ) -> Result<()> {
-    // Read local Cargo.toml
-    let manifest_path = format!("{}/Cargo.toml", local_path);
-    let manifest_content = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("Failed to read {}", manifest_path))?;
+    let local_path = Path::new(local_path);
 
-    let templates = parse_template_metadata(&manifest_content, battery_pack)?;
+    // Read local Cargo.toml
+    let manifest_path = local_path.join("Cargo.toml");
+    let manifest_content = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+
+    let crate_name = local_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+    let templates = parse_template_metadata(&manifest_content, crate_name)?;
     let template_path = resolve_template(&templates, template.as_deref())?;
 
+    generate_from_path(local_path, &template_path, name)
+}
+
+fn generate_from_path(crate_path: &Path, template_path: &str, name: Option<String>) -> Result<()> {
     let args = GenerateArgs {
         template_path: TemplatePath {
-            path: Some(local_path.to_string()),
-            auto_path: Some(template_path),
+            path: Some(crate_path.to_string_lossy().into_owned()),
+            auto_path: Some(template_path.to_string()),
             ..Default::default()
         },
         name,
@@ -228,78 +249,86 @@ fn generate_from_local(
     Ok(())
 }
 
-/// Resolved battery pack info from crates.io
-struct ResolvedBatteryPack {
-    /// The actual crate name on crates.io (e.g., "cli-battery-pack")
-    crate_name: String,
-    /// The repository URL
-    repository: String,
+/// Info about a crate from crates.io
+struct CrateMetadata {
+    version: String,
 }
 
-fn resolve_battery_pack(name: &str) -> Result<ResolvedBatteryPack> {
+/// Look up a crate on crates.io and return its metadata
+fn lookup_crate(crate_name: &str) -> Result<CrateMetadata> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
         .build()?;
 
-    // Try the crate name as-is first, then with -battery-pack suffix
-    let candidates = [name.to_string(), format!("{}-battery-pack", name)];
+    let url = format!("{}/{}", CRATES_IO_API, crate_name);
+    let response = client
+        .get(&url)
+        .send()
+        .with_context(|| format!("Failed to query crates.io for '{}'", crate_name))?;
 
-    for candidate in &candidates {
-        let url = format!("{}/{}", CRATES_IO_API, candidate);
-
-        let response = client.get(&url).send();
-
-        if let Ok(resp) = response {
-            if resp.status().is_success() {
-                if let Ok(parsed) = resp.json::<CratesIoResponse>() {
-                    if let Some(repo) = parsed.krate.repository {
-                        return Ok(ResolvedBatteryPack {
-                            crate_name: candidate.clone(),
-                            repository: repo,
-                        });
-                    }
-                }
-            }
-        }
+    if !response.status().is_success() {
+        bail!(
+            "Crate '{}' not found on crates.io (status: {})",
+            crate_name,
+            response.status()
+        );
     }
 
-    bail!(
-        "Could not find battery pack '{}' or '{}-battery-pack' on crates.io",
-        name,
-        name
-    )
+    let parsed: CratesIoResponse = response
+        .json()
+        .with_context(|| format!("Failed to parse crates.io response for '{}'", crate_name))?;
+
+    // Find the latest non-yanked version
+    let version = parsed
+        .versions
+        .iter()
+        .find(|v| !v.yanked)
+        .map(|v| v.num.clone())
+        .ok_or_else(|| anyhow::anyhow!("No non-yanked versions found for '{}'", crate_name))?;
+
+    Ok(CrateMetadata { version })
 }
 
-fn fetch_template_metadata(
-    repo_url: &str,
+/// Download a crate tarball and extract it to a temp directory
+fn download_and_extract_crate(
     crate_name: &str,
-) -> Result<BTreeMap<String, TemplateConfig>> {
-    // Convert GitHub repo URL to raw Cargo.toml URL
-    let raw_url = if repo_url.contains("github.com") {
-        repo_url
-            .replace("github.com", "raw.githubusercontent.com")
-            .trim_end_matches(".git")
-            .to_string()
-            + "/HEAD/Cargo.toml"
-    } else {
-        bail!(
-            "Unsupported repository host. Currently only GitHub is supported: {}",
-            repo_url
-        );
-    };
-
+    version: &str,
+) -> Result<tempfile::TempDir> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
         .build()?;
 
-    let manifest_content = client
-        .get(&raw_url)
-        .send()
-        .with_context(|| format!("Failed to fetch Cargo.toml from {}", raw_url))?
-        .text()
-        .with_context(|| "Failed to read Cargo.toml content")?;
+    // Download from CDN: https://static.crates.io/crates/{name}/{name}-{version}.crate
+    let url = format!("{}/{}/{}-{}.crate", CRATES_IO_CDN, crate_name, crate_name, version);
 
-    parse_template_metadata(&manifest_content, crate_name)
+    let response = client
+        .get(&url)
+        .send()
+        .with_context(|| format!("Failed to download crate from {}", url))?;
+
+    if !response.status().is_success() {
+        bail!(
+            "Failed to download '{}' version {} (status: {})",
+            crate_name,
+            version,
+            response.status()
+        );
+    }
+
+    let bytes = response
+        .bytes()
+        .with_context(|| "Failed to read crate tarball")?;
+
+    // Create temp directory and extract
+    let temp_dir = tempfile::tempdir().with_context(|| "Failed to create temp directory")?;
+
+    let decoder = GzDecoder::new(&bytes[..]);
+    let mut archive = Archive::new(decoder);
+    archive
+        .unpack(temp_dir.path())
+        .with_context(|| "Failed to extract crate tarball")?;
+
+    Ok(temp_dir)
 }
 
 fn parse_template_metadata(
