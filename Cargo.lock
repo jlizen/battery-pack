@@ -373,8 +373,10 @@ dependencies = [
  "console",
  "dialoguer",
  "error-battery-pack",
+ "ignore",
  "indicatif",
  "logging-battery-pack",
+ "regex",
 ]
 
 [[package]]

@@ -73,6 +73,7 @@ pub struct Manifest {
 #[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 pub struct PackageSection {
+    pub name: Option<String>,
     pub metadata: Option<PackageMetadata>,
 }
 
@@ -93,6 +94,16 @@ pub struct BatteryConfig {
     pub root: Option<ExportConfig>,
     #[serde(default)]
     pub modules: BTreeMap<String, ExportConfig>,
+    #[serde(default)]
+    pub templates: BTreeMap<String, TemplateConfig>,
+}
+
+/// Configuration for a project template
+#[derive(Debug, Deserialize, Clone)]
+pub struct TemplateConfig {
+    #[allow(dead_code)]
+    pub path: String,
+    pub description: String,
 }
 
 /// Configuration for what to export - can be a list of crates or detailed per-crate config
@@ -147,6 +158,7 @@ struct CargoMetadata {
 #[derive(Deserialize)]
 struct CargoPackage {
     name: String,
+    description: Option<String>,
     manifest_path: String,
     metadata: Option<CargoPackageMetadata>,
 }
@@ -169,22 +181,75 @@ struct CargoPackageMetadata {
 /// its contents are re-exported instead of the battery pack crate itself.
 pub fn generate_facade() -> Result<(), Error> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::MissingManifest)?;
-    let manifest_path = Path::new(&manifest_dir).join("Cargo.toml");
+    let manifest_dir_path = Path::new(&manifest_dir);
+    let manifest_path = manifest_dir_path.join("Cargo.toml");
     let out_dir = env::var("OUT_DIR").map_err(|_| Error::MissingManifest)?;
-    let out_path = Path::new(&out_dir).join("facade.rs");
+    let out_dir_path = Path::new(&out_dir);
 
     let manifest_content = fs::read_to_string(&manifest_path)?;
     let manifest: Manifest = toml::from_str(&manifest_content)?;
 
-    // Get cargo metadata to find battery pack dependencies
+    // Get cargo metadata to find battery pack dependencies and descriptions
     let cargo_metadata = get_cargo_metadata(&manifest_dir)?;
     let battery_pack_manifests = find_battery_pack_manifests(&manifest, &cargo_metadata);
+    let descriptions = extract_crate_descriptions(&cargo_metadata);
 
-    let code = FacadeGenerator::new(&manifest, &battery_pack_manifests).generate();
-    fs::write(&out_path, code)?;
+    let generator = FacadeGenerator::new(&manifest, &battery_pack_manifests, &descriptions);
+
+    // Generate facade.rs
+    let code = generator.generate();
+    fs::write(out_dir_path.join("facade.rs"), code)?;
+
+    // Generate docs.md by combining README.md with auto-generated sections
+    let readme_path = find_readme(manifest_dir_path);
+    let readme_content = readme_path
+        .as_ref()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    let crates_list = generator.generate_crates_list();
+    let examples_section = generate_examples_section(manifest_dir_path);
+
+    // Get templates from battery config
+    let battery_config = manifest
+        .package
+        .metadata
+        .as_ref()
+        .and_then(|m| m.battery.as_ref());
+    let crate_name = manifest.package.name.as_deref().unwrap_or("");
+    let templates_section = battery_config
+        .map(|b| &b.templates)
+        .and_then(|t| generate_templates_section(crate_name, t));
+
+    let mut docs = String::new();
+    if !readme_content.is_empty() {
+        docs.push_str(readme_content.trim());
+        docs.push_str("\n\n");
+    }
+    docs.push_str("## Included crates\n\n");
+    docs.push_str(&crates_list);
+    if let Some(examples) = examples_section {
+        docs.push_str("\n");
+        docs.push_str(&examples);
+    }
+    if let Some(templates) = templates_section {
+        docs.push_str("\n");
+        docs.push_str(&templates);
+    }
+    fs::write(out_dir_path.join("docs.md"), docs)?;
 
     // Tell Cargo to rerun if Cargo.toml changes
     println!("cargo:rerun-if-changed={}", manifest_path.display());
+
+    // Rerun if README.md changes
+    if let Some(readme) = &readme_path {
+        println!("cargo:rerun-if-changed={}", readme.display());
+    }
+
+    // Rerun if examples directory changes
+    let examples_dir = manifest_dir_path.join("examples");
+    if examples_dir.exists() {
+        println!("cargo:rerun-if-changed={}", examples_dir.display());
+    }
 
     // Also rerun if any battery pack dependency's Cargo.toml changes
     for (_, bp_manifest_path) in &battery_pack_manifests {
@@ -192,6 +257,117 @@ pub fn generate_facade() -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+/// Find README.md, checking src/ first, then crate root.
+fn find_readme(manifest_dir: &Path) -> Option<std::path::PathBuf> {
+    let src_readme = manifest_dir.join("src").join("README.md");
+    if src_readme.exists() {
+        return Some(src_readme);
+    }
+    let root_readme = manifest_dir.join("README.md");
+    if root_readme.exists() {
+        return Some(root_readme);
+    }
+    None
+}
+
+/// Generate the examples section by scanning the examples directory.
+/// Returns None if no examples directory exists or it's empty.
+fn generate_examples_section(manifest_dir: &Path) -> Option<String> {
+    let examples_dir = manifest_dir.join("examples");
+    if !examples_dir.exists() {
+        return None;
+    }
+
+    let mut examples: Vec<(String, String)> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(&examples_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "rs") {
+                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                    let desc = extract_example_description(&path).unwrap_or_default();
+                    examples.push((name.to_string(), desc));
+                }
+            }
+        }
+    }
+
+    if examples.is_empty() {
+        return None;
+    }
+
+    // Sort by name
+    examples.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Build the markdown
+    let mut md = String::new();
+    md.push_str("## Examples\n\n");
+
+    for (name, desc) in &examples {
+        if desc.is_empty() {
+            md.push_str(&format!("- **{}**\n", name));
+        } else {
+            md.push_str(&format!("- **{}** — {}\n", name, desc));
+        }
+    }
+
+    Some(md)
+}
+
+/// Extract the first line of the module doc comment from an example file.
+fn extract_example_description(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//!") {
+            // Extract the doc comment content
+            let doc = trimmed.strip_prefix("//!").unwrap_or("").trim();
+            if !doc.is_empty() {
+                return Some(doc.to_string());
+            }
+        } else if !trimmed.is_empty() && !trimmed.starts_with("//") {
+            // Hit non-comment code, stop looking
+            break;
+        }
+    }
+
+    None
+}
+
+/// Generate the templates section from battery config.
+/// Returns None if no templates are defined.
+fn generate_templates_section(
+    crate_name: &str,
+    templates: &BTreeMap<String, TemplateConfig>,
+) -> Option<String> {
+    if templates.is_empty() {
+        return None;
+    }
+
+    // Convert crate name to short form (e.g., "cli-battery-pack" -> "cli")
+    let short_name = crate_name
+        .strip_suffix("-battery-pack")
+        .unwrap_or(crate_name);
+
+    let mut md = String::new();
+    md.push_str("## Templates\n\n");
+
+    // Sort templates by name
+    let mut template_names: Vec<_> = templates.keys().collect();
+    template_names.sort();
+
+    for name in template_names {
+        let template = &templates[name];
+        md.push_str(&format!(
+            "- `cargo bp new {} --template {}` — {}\n",
+            short_name, name, template.description
+        ));
+    }
+
+    Some(md)
 }
 
 fn get_cargo_metadata(manifest_dir: &str) -> Result<CargoMetadata, Error> {
@@ -231,6 +407,24 @@ fn find_battery_pack_manifests(
     }
 
     battery_packs
+}
+
+/// Extract crate descriptions from cargo metadata.
+/// Returns a map of crate name -> description (first line only).
+fn extract_crate_descriptions(metadata: &CargoMetadata) -> BTreeMap<String, String> {
+    let mut descriptions = BTreeMap::new();
+
+    for package in &metadata.packages {
+        if let Some(ref desc) = package.description {
+            // Take only the first line, trimmed
+            let first_line = desc.lines().next().unwrap_or("").trim();
+            if !first_line.is_empty() {
+                descriptions.insert(package.name.clone(), first_line.to_string());
+            }
+        }
+    }
+
+    descriptions
 }
 
 // ============================================================================
@@ -292,6 +486,7 @@ impl Clone for Manifest {
     fn clone(&self) -> Self {
         Self {
             package: PackageSection {
+                name: self.package.name.clone(),
                 metadata: self.package.metadata.as_ref().map(|m| PackageMetadata {
                     battery: m.battery.clone(),
                 }),
@@ -308,6 +503,7 @@ impl Clone for BatteryConfig {
             exclude: self.exclude.clone(),
             root: self.root.clone(),
             modules: self.modules.clone(),
+            templates: self.templates.clone(),
         }
     }
 }
@@ -316,22 +512,36 @@ impl Clone for BatteryConfig {
 pub struct FacadeGenerator<'a, R: BatteryPackResolver = FileSystemResolver<'a>> {
     manifest: &'a Manifest,
     resolver: R,
+    descriptions: &'a BTreeMap<String, String>,
 }
 
 impl<'a> FacadeGenerator<'a, FileSystemResolver<'a>> {
     /// Create a generator using filesystem-based battery pack resolution.
-    pub fn new(manifest: &'a Manifest, battery_pack_paths: &'a BTreeMap<String, String>) -> Self {
+    pub fn new(
+        manifest: &'a Manifest,
+        battery_pack_paths: &'a BTreeMap<String, String>,
+        descriptions: &'a BTreeMap<String, String>,
+    ) -> Self {
         Self {
             manifest,
             resolver: FileSystemResolver { battery_pack_paths },
+            descriptions,
         }
     }
 }
 
 impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
     /// Create a generator with a custom resolver (for testing).
-    pub fn with_resolver(manifest: &'a Manifest, resolver: R) -> Self {
-        Self { manifest, resolver }
+    pub fn with_resolver(
+        manifest: &'a Manifest,
+        resolver: R,
+        descriptions: &'a BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            manifest,
+            resolver,
+            descriptions,
+        }
     }
 
     /// Generate the facade code as a string.
@@ -376,6 +586,80 @@ impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
         }
 
         code
+    }
+
+    /// Generate a markdown list of included crates with descriptions.
+    ///
+    /// Flattens battery pack contents into a single sorted list, with attribution
+    /// showing which battery pack each crate comes from.
+    pub fn generate_crates_list(&self) -> String {
+        let battery = self
+            .manifest
+            .package
+            .metadata
+            .as_ref()
+            .and_then(|m| m.battery.as_ref());
+
+        let exclude = self.get_exclude_set(battery);
+        let deps = self.get_dependencies();
+
+        // Collect all crates with their source (None = direct, Some = from battery pack)
+        let mut all_crates: Vec<(String, Option<String>)> = Vec::new();
+
+        for dep in &deps {
+            if exclude.contains(dep) {
+                continue;
+            }
+
+            if let Some(bp_manifest) = self.resolver.resolve(dep) {
+                // This is a battery pack - collect its contents
+                let bp_battery = bp_manifest
+                    .package
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.battery.as_ref());
+
+                let mut bp_exclude: HashSet<String> = bp_battery
+                    .map(|b| b.exclude.iter().cloned().collect())
+                    .unwrap_or_default();
+                bp_exclude.insert("battery-pack".to_string());
+
+                for bp_dep in bp_manifest.dependencies.keys() {
+                    if !bp_exclude.contains(bp_dep) {
+                        all_crates.push((bp_dep.clone(), Some(dep.clone())));
+                    }
+                }
+            } else {
+                // Regular crate
+                all_crates.push((dep.clone(), None));
+            }
+        }
+
+        // Sort by crate name
+        all_crates.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Generate the markdown list
+        let mut md = String::new();
+        for (crate_name, source) in all_crates {
+            let ident = crate_name.replace('-', "_");
+            let desc = self
+                .descriptions
+                .get(&crate_name)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+
+            let attribution = match source {
+                Some(bp_name) => {
+                    let bp_ident = bp_name.replace('-', "_");
+                    format!(" *(via [`{}`])*", bp_ident)
+                }
+                None => String::new(),
+            };
+
+            md.push_str(&format!("- [`{}`] — {}{}\n", ident, desc, attribution));
+        }
+
+        md
     }
 
     fn get_exclude_set(&self, battery: Option<&BatteryConfig>) -> HashSet<String> {
@@ -458,10 +742,15 @@ impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
 
         if let Some(bp_manifest) = self.resolver.resolve(crate_name) {
             // This is a battery pack - re-export its contents
-            self.generate_battery_pack_reexport(&ident, &bp_manifest, indent)
+            self.generate_battery_pack_reexport(&ident, crate_name, &bp_manifest, indent)
         } else {
-            // Regular crate - simple re-export
-            format!("{}pub use {};\n", indent, ident)
+            // Regular crate - simple re-export with doc comment
+            let mut code = String::new();
+            if let Some(desc) = self.descriptions.get(crate_name) {
+                code.push_str(&format!("{}/// {}\n", indent, desc));
+            }
+            code.push_str(&format!("{}pub use {};\n", indent, ident));
+            code
         }
     }
 
@@ -469,10 +758,16 @@ impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
     fn generate_battery_pack_reexport(
         &self,
         bp_ident: &str,
+        bp_name: &str,
         bp_manifest: &Manifest,
         indent: &str,
     ) -> String {
         let mut code = String::new();
+
+        // Add a doc comment for the battery pack itself
+        if let Some(desc) = self.descriptions.get(bp_name) {
+            code.push_str(&format!("{}// From {}: {}\n", indent, bp_name, desc));
+        }
 
         let mut bp_deps: Vec<String> = bp_manifest.dependencies.keys().cloned().collect();
         bp_deps.sort();
@@ -491,6 +786,9 @@ impl<'a, R: BatteryPackResolver> FacadeGenerator<'a, R> {
         for dep in bp_deps {
             if !bp_exclude.contains(&dep) {
                 let dep_ident = dep.replace('-', "_");
+                if let Some(desc) = self.descriptions.get(&dep) {
+                    code.push_str(&format!("{}/// {}\n", indent, desc));
+                }
                 code.push_str(&format!("{}pub use {}::{};\n", indent, bp_ident, dep_ident));
             }
         }
@@ -548,8 +846,17 @@ mod tests {
     use expect_test::{expect, Expect};
 
     fn check(manifest_toml: &str, resolver: InMemoryResolver, expect: Expect) {
+        check_with_descriptions(manifest_toml, resolver, &BTreeMap::new(), expect);
+    }
+
+    fn check_with_descriptions(
+        manifest_toml: &str,
+        resolver: InMemoryResolver,
+        descriptions: &BTreeMap<String, String>,
+        expect: Expect,
+    ) {
         let manifest: Manifest = toml::from_str(manifest_toml).unwrap();
-        let generator = FacadeGenerator::with_resolver(&manifest, resolver);
+        let generator = FacadeGenerator::with_resolver(&manifest, resolver, descriptions);
         let actual = generator.generate();
         expect.assert_eq(&actual);
     }
@@ -913,6 +1220,104 @@ mod tests {
                 // Auto-generated by battery-pack. Do not edit.
 
                 pub use tokio::*;
+            "#]],
+        );
+    }
+
+    #[test]
+    fn test_descriptions() {
+        let mut descriptions = BTreeMap::new();
+        descriptions.insert("tokio".to_string(), "An async runtime for Rust".to_string());
+        descriptions.insert("serde".to_string(), "A serialization framework".to_string());
+
+        check_with_descriptions(
+            r#"
+            [package]
+            name = "my-battery"
+            version = "0.1.0"
+
+            [package.metadata.battery]
+            schema_version = 1
+
+            [dependencies]
+            tokio = "1"
+            serde = "1"
+            "#,
+            InMemoryResolver::new(),
+            &descriptions,
+            expect![[r#"
+                // Auto-generated by battery-pack. Do not edit.
+
+                /// A serialization framework
+                pub use serde;
+                /// An async runtime for Rust
+                pub use tokio;
+            "#]],
+        );
+    }
+
+    #[test]
+    fn test_battery_pack_reexport_with_descriptions() {
+        let mut resolver = InMemoryResolver::new();
+        resolver.add(
+            "error-bp",
+            r#"
+            [package]
+            name = "error-bp"
+            version = "0.1.0"
+
+            [package.metadata.battery]
+            schema_version = 1
+
+            [dependencies]
+            anyhow = "1"
+            thiserror = "2"
+            "#,
+        );
+
+        let mut descriptions = BTreeMap::new();
+        descriptions.insert(
+            "error-bp".to_string(),
+            "Error handling battery pack".to_string(),
+        );
+        descriptions.insert(
+            "anyhow".to_string(),
+            "Flexible concrete Error type".to_string(),
+        );
+        descriptions.insert(
+            "thiserror".to_string(),
+            "derive(Error) for custom error types".to_string(),
+        );
+        descriptions.insert(
+            "clap".to_string(),
+            "Command line argument parser".to_string(),
+        );
+
+        check_with_descriptions(
+            r#"
+            [package]
+            name = "cli-bp"
+            version = "0.1.0"
+
+            [package.metadata.battery]
+            schema_version = 1
+
+            [dependencies]
+            error-bp = "0.1"
+            clap = "4"
+            "#,
+            resolver,
+            &descriptions,
+            expect![[r#"
+                // Auto-generated by battery-pack. Do not edit.
+
+                /// Command line argument parser
+                pub use clap;
+                // From error-bp: Error handling battery pack
+                /// Flexible concrete Error type
+                pub use error_bp::anyhow;
+                /// derive(Error) for custom error types
+                pub use error_bp::thiserror;
             "#]],
         );
     }
