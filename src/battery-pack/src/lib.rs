@@ -29,4 +29,4 @@
 //! include!(concat!(env!("OUT_DIR"), "/facade.rs"));
 //! ```
 
-pub use battery_pack_build as build;
+pub use bphelper_build as build;

@@ -2,9 +2,19 @@
 resolver = "2"
 members = [
     "src/battery-pack",
-    "src/battery-pack-build",
-    "src/battery-pack-cli",
+    "src/bphelper-build",
+    "src/bphelper-cli",
     "src/error-battery-pack",
     "src/logging-battery-pack",
     "src/cli-battery-pack",
 ]
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+cargo-generate = "0.22"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+expect-test = "1"

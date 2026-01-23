@@ -1,3 +1,3 @@
 fn main() -> anyhow::Result<()> {
-    battery_pack_cli::main()
+    bphelper_cli::main()
 }

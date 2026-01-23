@@ -1,0 +1,16 @@
+[package]
+name = "bphelper-build"
+version = "0.1.0"
+edition = "2024"
+description = "Build-time facade generation for battery packs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nikomatsakis/battery-pack"
+keywords = ["battery-pack", "build", "codegen"]
+
+[dependencies]
+toml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+expect-test.workspace = true

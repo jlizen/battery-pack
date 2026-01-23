@@ -1,0 +1,16 @@
+[package]
+name = "bphelper-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CLI for creating and managing battery packs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nikomatsakis/battery-pack"
+keywords = ["battery-pack", "cli", "cargo"]
+
+[dependencies]
+clap.workspace = true
+cargo-generate.workspace = true
+anyhow.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+toml.workspace = true
