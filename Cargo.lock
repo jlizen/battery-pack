@@ -190,6 +190,7 @@ dependencies = [
  "clap",
  "console",
  "crossterm",
+ "dialoguer",
  "flate2",
  "open",
  "ratatui",

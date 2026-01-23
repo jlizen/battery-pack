@@ -165,6 +165,7 @@ struct CargoManifest {
 #[derive(Deserialize, Default)]
 struct PackageSection {
     description: Option<String>,
+    repository: Option<String>,
     metadata: Option<PackageMetadata>,
 }
 
@@ -221,6 +222,7 @@ pub struct BatteryPackDetail {
     pub short_name: String,
     pub version: String,
     pub description: String,
+    pub repository: Option<String>,
     pub owners: Vec<OwnerInfo>,
     pub crates: Vec<String>,
     pub extends: Vec<String>,
@@ -485,19 +487,49 @@ fn resolve_template(
                 // Multiple templates, but there's a 'default'
                 Ok(config.path.clone())
             } else {
-                // Multiple templates, no default - list them
-                println!("Available templates:");
-                for (name, config) in templates {
-                    if let Some(desc) = &config.description {
-                        println!("  {} - {}", name, desc);
-                    } else {
-                        println!("  {}", name);
-                    }
-                }
-                bail!("Multiple templates available. Please specify one with --template <name>");
+                // Multiple templates, no default - prompt user to pick
+                prompt_for_template(templates)
             }
         }
     }
+}
+
+fn prompt_for_template(templates: &BTreeMap<String, TemplateConfig>) -> Result<String> {
+    use dialoguer::{theme::ColorfulTheme, Select};
+
+    // Build display items with descriptions
+    let items: Vec<String> = templates
+        .iter()
+        .map(|(name, config)| {
+            if let Some(desc) = &config.description {
+                format!("{} - {}", name, desc)
+            } else {
+                name.clone()
+            }
+        })
+        .collect();
+
+    // Check if we're in a TTY for interactive mode
+    if !std::io::stdout().is_terminal() {
+        // Non-interactive: list templates and bail
+        println!("Available templates:");
+        for item in &items {
+            println!("  {}", item);
+        }
+        bail!("Multiple templates available. Please specify one with --template <name>");
+    }
+
+    // Interactive: show selector
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select a template")
+        .items(&items)
+        .default(0)
+        .interact()
+        .context("Failed to select template")?;
+
+    // Get the selected template's path
+    let (_, config) = templates.iter().nth(selection).unwrap();
+    Ok(config.path.clone())
 }
 
 /// Fetch battery pack list from crates.io
@@ -635,7 +667,8 @@ pub fn fetch_battery_pack_detail(name: &str) -> Result<BatteryPackDetail> {
 
     // Extract info
     let package = manifest.package.unwrap_or_default();
-    let description = package.description.unwrap_or_default();
+    let description = package.description.clone().unwrap_or_default();
+    let repository = package.repository.clone();
     let battery = package
         .metadata
         .and_then(|m| m.battery)
@@ -669,6 +702,7 @@ pub fn fetch_battery_pack_detail(name: &str) -> Result<BatteryPackDetail> {
         name: crate_name,
         version: crate_info.version,
         description,
+        repository,
         owners: owners.into_iter().map(OwnerInfo::from).collect(),
         crates,
         extends,
