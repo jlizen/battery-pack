@@ -12,6 +12,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
+use std::rc::Rc;
 use std::time::Duration;
 
 // ============================================================================
@@ -70,7 +71,7 @@ struct ListScreen {
 }
 
 struct DetailScreen {
-    detail: BatteryPackDetail,
+    detail: Rc<BatteryPackDetail>,
     /// Index into selectable_items()
     selected_index: usize,
     came_from_list: bool,
@@ -171,8 +172,8 @@ struct FormScreen {
     project_name: String,
     focused_field: FormField,
     cursor_position: usize,
-    /// The detail screen to return to on cancel
-    detail: BatteryPackDetail,
+    /// The detail screen to return to on cancel (shared to avoid cloning)
+    detail: Rc<BatteryPackDetail>,
     /// Selected index to restore when returning to detail
     selected_index: usize,
     came_from_list: bool,
@@ -297,7 +298,7 @@ impl App {
                         + detail.templates.len()
                         + detail.examples.len();
                     self.screen = Screen::Detail(DetailScreen {
-                        detail,
+                        detail: Rc::new(detail),
                         selected_index: initial_index,
                         came_from_list: *came_from_list,
                     });
@@ -383,7 +384,7 @@ impl App {
             },
             DetailOpenCratesIo(String),
             DetailAdd(String),
-            DetailNewProject(BatteryPackDetail, Option<String>, usize, bool),
+            DetailNewProject(Rc<BatteryPackDetail>, Option<String>, usize, bool),
             DetailBack(bool),
             FormToggleField,
             FormSubmit(
@@ -391,11 +392,11 @@ impl App {
                 Option<String>,
                 String,
                 String,
-                BatteryPackDetail,
+                Rc<BatteryPackDetail>,
                 usize,
                 bool,
             ),
-            FormCancel(BatteryPackDetail, usize, bool),
+            FormCancel(Rc<BatteryPackDetail>, usize, bool),
             FormChar(char),
             FormBackspace,
             FormDelete,
@@ -452,7 +453,7 @@ impl App {
                             }
                             DetailItem::ActionNewProject => {
                                 Action::DetailNewProject(
-                                    state.detail.clone(),
+                                    Rc::clone(&state.detail),
                                     None, // no specific template
                                     state.selected_index,
                                     state.came_from_list,
@@ -474,7 +475,7 @@ impl App {
                             .find(|t| t.path == _path)
                             .map(|t| t.name.clone());
                         Action::DetailNewProject(
-                            state.detail.clone(),
+                            Rc::clone(&state.detail),
                             template_name,
                             state.selected_index,
                             state.came_from_list,
@@ -496,7 +497,7 @@ impl App {
                             state.template.clone(),
                             state.directory.clone(),
                             state.project_name.clone(),
-                            state.detail.clone(),
+                            Rc::clone(&state.detail),
                             state.selected_index,
                             state.came_from_list,
                         )
@@ -505,7 +506,7 @@ impl App {
                     }
                 }
                 KeyCode::Esc => Action::FormCancel(
-                    state.detail.clone(),
+                    Rc::clone(&state.detail),
                     state.selected_index,
                     state.came_from_list,
                 ),
@@ -993,7 +994,7 @@ fn render_detail(frame: &mut Frame, state: &DetailScreen) {
 fn render_form(frame: &mut Frame, state: &FormScreen) {
     // First render detail view dimmed underneath
     let dimmed_detail = DetailScreen {
-        detail: state.detail.clone(),
+        detail: Rc::clone(&state.detail),
         selected_index: state.selected_index,
         came_from_list: state.came_from_list,
     };
