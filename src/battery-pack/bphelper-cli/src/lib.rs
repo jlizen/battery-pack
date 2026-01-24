@@ -761,16 +761,17 @@ fn build_battery_pack_detail(
     let battery = package.metadata.and_then(|m| m.battery).unwrap_or_default();
 
     // Split dependencies into battery packs and regular crates
-    let mut extends = Vec::new();
-    let mut crates = Vec::new();
+    let (extends_raw, crates_raw): (Vec<_>, Vec<_>) = manifest
+        .dependencies
+        .keys()
+        .filter(|d| *d != "battery-pack")
+        .partition(|d| d.ends_with("-battery-pack"));
 
-    for dep_name in manifest.dependencies.keys() {
-        if dep_name.ends_with("-battery-pack") {
-            extends.push(short_name(dep_name).to_string());
-        } else if dep_name != "battery-pack" {
-            crates.push(dep_name.clone());
-        }
-    }
+    let extends: Vec<String> = extends_raw
+        .into_iter()
+        .map(|d| short_name(d).to_string())
+        .collect();
+    let crates: Vec<String> = crates_raw.into_iter().cloned().collect();
 
     // Fetch the GitHub repository tree to resolve paths
     let repo_tree = repository.as_ref().and_then(|r| fetch_github_tree(r));
