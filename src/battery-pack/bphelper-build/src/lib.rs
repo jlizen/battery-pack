@@ -63,28 +63,28 @@ impl std::error::Error for Error {}
 // ============================================================================
 
 /// Parsed Cargo.toml manifest (only the fields we care about)
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct Manifest {
     pub package: PackageSection,
     pub dependencies: BTreeMap<String, toml::Value>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct PackageSection {
     pub name: Option<String>,
     pub metadata: Option<PackageMetadata>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct PackageMetadata {
     pub battery: Option<BatteryConfig>,
 }
 
 /// The [package.metadata.battery] configuration
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct BatteryConfig {
     #[allow(dead_code)]
@@ -478,33 +478,6 @@ impl Default for InMemoryResolver {
 impl BatteryPackResolver for InMemoryResolver {
     fn resolve(&self, crate_name: &str) -> Option<Manifest> {
         self.manifests.get(crate_name).cloned()
-    }
-}
-
-// Need Clone for InMemoryResolver
-impl Clone for Manifest {
-    fn clone(&self) -> Self {
-        Self {
-            package: PackageSection {
-                name: self.package.name.clone(),
-                metadata: self.package.metadata.as_ref().map(|m| PackageMetadata {
-                    battery: m.battery.clone(),
-                }),
-            },
-            dependencies: self.dependencies.clone(),
-        }
-    }
-}
-
-impl Clone for BatteryConfig {
-    fn clone(&self) -> Self {
-        Self {
-            schema_version: self.schema_version,
-            exclude: self.exclude.clone(),
-            root: self.root.clone(),
-            modules: self.modules.clone(),
-            templates: self.templates.clone(),
-        }
     }
 }
 
