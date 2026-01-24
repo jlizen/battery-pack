@@ -401,10 +401,8 @@ fn find_battery_pack_manifests(
 
     for package in &metadata.packages {
         if deps.contains(&package.name) {
-            if let Some(ref pkg_metadata) = package.metadata {
-                if pkg_metadata.battery.is_some() {
-                    battery_packs.insert(package.name.clone(), package.manifest_path.clone());
-                }
+            if package.metadata.as_ref().and_then(|m| m.battery.as_ref()).is_some() {
+                battery_packs.insert(package.name.clone(), package.manifest_path.clone());
             }
         }
     }
