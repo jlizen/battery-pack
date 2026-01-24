@@ -567,7 +567,10 @@ fn prompt_for_template(templates: &BTreeMap<String, TemplateConfig>) -> Result<S
         .context("Failed to select template")?;
 
     // Get the selected template's path
-    let (_, config) = templates.iter().nth(selection).unwrap();
+    let (_, config) = templates
+        .iter()
+        .nth(selection)
+        .ok_or_else(|| anyhow::anyhow!("Invalid template selection"))?;
     Ok(config.path.clone())
 }
 
