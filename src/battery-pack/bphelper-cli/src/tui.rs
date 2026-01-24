@@ -83,10 +83,10 @@ enum DetailItem {
     Crate(String),
     /// An extended battery pack - opens crates.io
     Extends(String),
-    /// A template - opens GitHub tree URL (stores just the path)
-    Template(String),
-    /// An example - opens GitHub tree URL (stores example name)
-    Example(String),
+    /// A template - opens GitHub tree URL (stores local path and resolved repo path)
+    Template { _path: String, repo_path: Option<String> },
+    /// An example - opens GitHub blob URL (stores name and resolved repo path)
+    Example { _name: String, repo_path: Option<String> },
     /// Open on crates.io action
     ActionOpenCratesIo,
     /// Add to project action
@@ -112,12 +112,18 @@ impl DetailScreen {
 
         // Templates
         for tmpl in &self.detail.templates {
-            items.push(DetailItem::Template(tmpl.path.clone()));
+            items.push(DetailItem::Template {
+                _path: tmpl.path.clone(),
+                repo_path: tmpl.repo_path.clone(),
+            });
         }
 
         // Examples
         for example in &self.detail.examples {
-            items.push(DetailItem::Example(example.name.clone()));
+            items.push(DetailItem::Example {
+                _name: example.name.clone(),
+                repo_path: example.repo_path.clone(),
+            });
         }
 
         // Actions (always present)
@@ -359,11 +365,11 @@ impl App {
             OpenCratesIoUrl(String),
             OpenTemplate {
                 repository: Option<String>,
-                path: String,
+                repo_path: Option<String>,
             },
             OpenExample {
                 repository: Option<String>,
-                name: String,
+                repo_path: Option<String>,
             },
             DetailOpenCratesIo(String),
             DetailAdd(String),
@@ -420,13 +426,13 @@ impl App {
                                 };
                                 Action::OpenCratesIoUrl(full_name)
                             }
-                            DetailItem::Template(path) => Action::OpenTemplate {
+                            DetailItem::Template { _path: _, repo_path } => Action::OpenTemplate {
                                 repository: state.detail.repository.clone(),
-                                path,
+                                repo_path,
                             },
-                            DetailItem::Example(name) => Action::OpenExample {
+                            DetailItem::Example { _name: _, repo_path } => Action::OpenExample {
                                 repository: state.detail.repository.clone(),
-                                name,
+                                repo_path,
                             },
                             DetailItem::ActionOpenCratesIo => {
                                 Action::DetailOpenCratesIo(state.detail.name.clone())
@@ -449,13 +455,13 @@ impl App {
                 }
                 KeyCode::Char('n') => {
                     // 'n' creates new project with currently selected template (if a template is selected)
-                    if let Some(DetailItem::Template(path)) = state.selected_item() {
+                    if let Some(DetailItem::Template { _path, repo_path: _ }) = state.selected_item() {
                         // Find the template name from the path
                         let template_name = state
                             .detail
                             .templates
                             .iter()
-                            .find(|t| t.path == path)
+                            .find(|t| t.path == _path)
                             .map(|t| t.name.clone());
                         Action::DetailNewProject(
                             state.detail.clone(),
@@ -555,13 +561,18 @@ impl App {
                 let url = format!("https://crates.io/crates/{}", crate_name);
                 self.pending_action = Some(PendingAction::OpenUrl { url });
             }
-            Action::OpenTemplate { repository, path } => {
-                let url = build_github_url(repository.as_deref(), &path);
+            Action::OpenTemplate { repository, repo_path } => {
+                let url = match repo_path {
+                    Some(path) => build_github_url(repository.as_deref(), &path),
+                    None => repository.unwrap_or_else(|| "https://crates.io".to_string()),
+                };
                 self.pending_action = Some(PendingAction::OpenUrl { url });
             }
-            Action::OpenExample { repository, name } => {
-                let path = format!("examples/{}.rs", name);
-                let url = build_github_url(repository.as_deref(), &path);
+            Action::OpenExample { repository, repo_path } => {
+                let url = match repo_path {
+                    Some(path) => build_github_blob_url(repository.as_deref(), &path),
+                    None => repository.unwrap_or_else(|| "https://crates.io".to_string()),
+                };
                 self.pending_action = Some(PendingAction::OpenUrl { url });
             }
             Action::DetailOpenCratesIo(crate_name) => {
@@ -951,7 +962,7 @@ fn render_detail(frame: &mut Frame, state: &DetailScreen) {
     } else {
         "Esc/q Quit"
     };
-    let template_selected = matches!(state.selected_item(), Some(DetailItem::Template(_)));
+    let template_selected = matches!(state.selected_item(), Some(DetailItem::Template { .. }));
     let footer_text = if template_selected {
         format!(
             "↑↓/jk Navigate | Enter Open | n New project | {}",
@@ -1073,10 +1084,20 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     h_area
 }
 
-/// Build a GitHub URL for a template path.
+/// Build a GitHub tree URL for a directory path.
 /// If repository is set and looks like a GitHub URL, construct a tree URL.
 /// Otherwise fall back to a crates.io search or just open the repo root.
 fn build_github_url(repository: Option<&str>, path: &str) -> String {
+    build_github_ref_url(repository, "tree", path)
+}
+
+/// Build a GitHub blob URL for a file path.
+fn build_github_blob_url(repository: Option<&str>, path: &str) -> String {
+    build_github_ref_url(repository, "blob", path)
+}
+
+/// Build a GitHub URL with the specified ref type (tree or blob).
+fn build_github_ref_url(repository: Option<&str>, ref_type: &str, path: &str) -> String {
     match repository {
         Some(repo) => {
             // Try to parse GitHub URL: https://github.com/owner/repo
@@ -1088,8 +1109,8 @@ fn build_github_url(repository: Option<&str>, path: &str) -> String {
                 let gh_path = gh_path.strip_suffix(".git").unwrap_or(gh_path);
                 // Remove trailing slash
                 let gh_path = gh_path.trim_end_matches('/');
-                // Construct tree URL with main branch
-                format!("https://github.com/{}/tree/main/{}", gh_path, path)
+                // Construct URL with main branch
+                format!("https://github.com/{}/{}/main/{}", gh_path, ref_type, path)
             } else {
                 // Not a GitHub URL, just open the repository URL
                 repo.to_string()

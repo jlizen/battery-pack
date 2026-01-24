@@ -210,6 +210,23 @@ struct Owner {
 }
 
 // ============================================================================
+// GitHub API types
+// ============================================================================
+
+#[derive(Deserialize)]
+struct GitHubTreeResponse {
+    tree: Vec<GitHubTreeEntry>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    truncated: bool,
+}
+
+#[derive(Deserialize)]
+struct GitHubTreeEntry {
+    path: String,
+}
+
+// ============================================================================
 // Shared data types (used by both TUI and text output)
 // ============================================================================
 
@@ -257,12 +274,18 @@ pub struct TemplateInfo {
     pub name: String,
     pub path: String,
     pub description: Option<String>,
+    /// Full path in the repository (e.g., "src/cli-battery-pack/templates/simple")
+    /// Resolved by searching the GitHub tree API
+    pub repo_path: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct ExampleInfo {
     pub name: String,
     pub description: Option<String>,
+    /// Full path in the repository (e.g., "src/cli-battery-pack/examples/mini-grep.rs")
+    /// Resolved by searching the GitHub tree API
+    pub repo_path: Option<String>,
 }
 
 // ============================================================================
@@ -704,19 +727,28 @@ pub fn fetch_battery_pack_detail(name: &str, path: Option<&str>) -> Result<Batte
         }
     }
 
-    // Convert templates
+    // Fetch the GitHub repository tree to resolve paths
+    let repo_tree = repository.as_ref().and_then(|r| fetch_github_tree(r));
+
+    // Convert templates with resolved repo paths
     let templates = battery
         .templates
         .into_iter()
-        .map(|(name, config)| TemplateInfo {
-            name,
-            path: config.path,
-            description: config.description,
+        .map(|(name, config)| {
+            let repo_path = repo_tree
+                .as_ref()
+                .and_then(|tree| find_template_path(tree, &config.path));
+            TemplateInfo {
+                name,
+                path: config.path,
+                description: config.description,
+                repo_path,
+            }
         })
         .collect();
 
     // Scan examples directory
-    let examples = scan_examples(&crate_dir);
+    let examples = scan_examples(&crate_dir, repo_tree.as_deref());
 
     Ok(BatteryPackDetail {
         short_name: short_name(&crate_name).to_string(),
@@ -769,19 +801,28 @@ fn fetch_battery_pack_detail_from_path(path: &str) -> Result<BatteryPackDetail> 
         }
     }
 
-    // Convert templates
+    // Fetch the GitHub repository tree to resolve paths
+    let repo_tree = repository.as_ref().and_then(|r| fetch_github_tree(r));
+
+    // Convert templates with resolved repo paths
     let templates = battery
         .templates
         .into_iter()
-        .map(|(name, config)| TemplateInfo {
-            name,
-            path: config.path,
-            description: config.description,
+        .map(|(name, config)| {
+            let repo_path = repo_tree
+                .as_ref()
+                .and_then(|tree| find_template_path(tree, &config.path));
+            TemplateInfo {
+                name,
+                path: config.path,
+                description: config.description,
+                repo_path,
+            }
         })
         .collect();
 
     // Scan examples directory
-    let examples = scan_examples(crate_dir);
+    let examples = scan_examples(crate_dir, repo_tree.as_deref());
 
     Ok(BatteryPackDetail {
         short_name: short_name(&crate_name).to_string(),
@@ -917,8 +958,9 @@ fn fetch_owners(crate_name: &str) -> Result<Vec<Owner>> {
     Ok(parsed.users)
 }
 
-/// Scan the examples directory and extract example info
-fn scan_examples(crate_dir: &std::path::Path) -> Vec<ExampleInfo> {
+/// Scan the examples directory and extract example info.
+/// If a GitHub tree is provided, resolves the full repository path for each example.
+fn scan_examples(crate_dir: &std::path::Path, repo_tree: Option<&[String]>) -> Vec<ExampleInfo> {
     let examples_dir = crate_dir.join("examples");
     if !examples_dir.exists() {
         return Vec::new();
@@ -932,9 +974,11 @@ fn scan_examples(crate_dir: &std::path::Path) -> Vec<ExampleInfo> {
             if path.extension().is_some_and(|ext| ext == "rs") {
                 if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
                     let description = extract_example_description(&path);
+                    let repo_path = repo_tree.and_then(|tree| find_example_path(tree, name));
                     examples.push(ExampleInfo {
                         name: name.to_string(),
                         description,
+                        repo_path,
                     });
                 }
             }
@@ -964,4 +1008,60 @@ fn extract_example_description(path: &std::path::Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Fetch the repository tree from GitHub API.
+/// Returns a list of all file paths in the repository.
+fn fetch_github_tree(repository: &str) -> Option<Vec<String>> {
+    // Parse GitHub URL: https://github.com/owner/repo
+    let gh_path = repository
+        .strip_prefix("https://github.com/")
+        .or_else(|| repository.strip_prefix("http://github.com/"))?;
+    let gh_path = gh_path.strip_suffix(".git").unwrap_or(gh_path);
+    let gh_path = gh_path.trim_end_matches('/');
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
+        .build()
+        .ok()?;
+
+    // Fetch the tree recursively using the main branch
+    let url = format!(
+        "https://api.github.com/repos/{}/git/trees/main?recursive=1",
+        gh_path
+    );
+
+    let response = client.get(&url).send().ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let tree_response: GitHubTreeResponse = response.json().ok()?;
+
+    // Extract all paths (both blobs/files and trees/directories)
+    Some(
+        tree_response
+            .tree
+            .into_iter()
+            .map(|e| e.path)
+            .collect(),
+    )
+}
+
+/// Find the full repository path for an example file.
+/// Searches the tree for a file matching "examples/{name}.rs".
+fn find_example_path(tree: &[String], example_name: &str) -> Option<String> {
+    let suffix = format!("examples/{}.rs", example_name);
+    tree.iter()
+        .find(|path| path.ends_with(&suffix))
+        .cloned()
+}
+
+/// Find the full repository path for a template directory.
+/// Searches the tree for a path matching "templates/{name}" or "{name}".
+fn find_template_path(tree: &[String], template_path: &str) -> Option<String> {
+    // The template path from config might be "templates/simple" or just the relative path
+    tree.iter()
+        .find(|path| path.ends_with(template_path))
+        .cloned()
 }
