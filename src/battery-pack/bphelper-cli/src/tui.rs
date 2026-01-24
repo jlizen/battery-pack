@@ -818,6 +818,38 @@ fn render_list(frame: &mut Frame, state: &mut ListScreen) {
     );
 }
 
+/// Helper function to render a selectable section with consistent styling
+fn render_selectable_section<'a, T>(
+    lines: &mut Vec<Line<'a>>,
+    item_index: &mut usize,
+    selected_index: usize,
+    label: &'a str,
+    items: &[T],
+    normal_color: Option<Color>,
+    format_item: impl Fn(&T) -> String,
+) {
+    if items.is_empty() {
+        return;
+    }
+
+    lines.push(Line::styled(label, Style::default().bold()));
+    for item in items {
+        let selected = selected_index == *item_index;
+        let style = if selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan).bold()
+        } else {
+            match normal_color {
+                Some(color) => Style::default().fg(color),
+                None => Style::default(),
+            }
+        };
+        let prefix = if selected { "> " } else { "  " };
+        lines.push(Line::styled(format!("{}{}", prefix, format_item(item)), style));
+        *item_index += 1;
+    }
+    lines.push(Line::from(""));
+}
+
 fn render_detail(frame: &mut Frame, state: &DetailScreen) {
     let area = frame.area();
     let detail = &state.detail;
@@ -861,98 +893,67 @@ fn render_detail(frame: &mut Frame, state: &DetailScreen) {
         lines.push(Line::from(""));
     }
 
-    if !detail.crates.is_empty() {
-        lines.push(Line::styled("Crates:", Style::default().bold()));
-        for crate_name in &detail.crates {
-            let selected = state.selected_index == item_index;
-            let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan).bold()
-            } else {
-                Style::default()
-            };
-            let prefix = if selected { "> " } else { "  " };
-            lines.push(Line::styled(format!("{}{}", prefix, crate_name), style));
-            item_index += 1;
-        }
-        lines.push(Line::from(""));
-    }
+    render_selectable_section(
+        &mut lines,
+        &mut item_index,
+        state.selected_index,
+        "Crates:",
+        &detail.crates,
+        None,
+        |crate_name| crate_name.clone(),
+    );
 
-    if !detail.extends.is_empty() {
-        lines.push(Line::styled("Extends:", Style::default().bold()));
-        for bp in &detail.extends {
-            let selected = state.selected_index == item_index;
-            let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan).bold()
-            } else {
-                Style::default().fg(Color::Yellow)
-            };
-            let prefix = if selected { "> " } else { "  " };
-            lines.push(Line::styled(format!("{}{}", prefix, bp), style));
-            item_index += 1;
-        }
-        lines.push(Line::from(""));
-    }
+    render_selectable_section(
+        &mut lines,
+        &mut item_index,
+        state.selected_index,
+        "Extends:",
+        &detail.extends,
+        Some(Color::Yellow),
+        |bp| bp.clone(),
+    );
 
-    if !detail.templates.is_empty() {
-        lines.push(Line::styled("Templates:", Style::default().bold()));
-        for tmpl in &detail.templates {
-            let selected = state.selected_index == item_index;
-            let text = match &tmpl.description {
-                Some(desc) => format!("{} - {}", tmpl.name, desc),
-                None => tmpl.name.clone(),
-            };
-            let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan).bold()
-            } else {
-                Style::default().fg(Color::Cyan)
-            };
-            let prefix = if selected { "> " } else { "  " };
-            lines.push(Line::styled(format!("{}{}", prefix, text), style));
-            item_index += 1;
-        }
-        lines.push(Line::from(""));
-    }
+    render_selectable_section(
+        &mut lines,
+        &mut item_index,
+        state.selected_index,
+        "Templates:",
+        &detail.templates,
+        Some(Color::Cyan),
+        |tmpl| match &tmpl.description {
+            Some(desc) => format!("{} - {}", tmpl.name, desc),
+            None => tmpl.name.clone(),
+        },
+    );
 
-    if !detail.examples.is_empty() {
-        lines.push(Line::styled("Examples:", Style::default().bold()));
-        for example in &detail.examples {
-            let selected = state.selected_index == item_index;
-            let text = match &example.description {
-                Some(desc) => format!("{} - {}", example.name, desc),
-                None => example.name.clone(),
-            };
-            let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan).bold()
-            } else {
-                Style::default().fg(Color::Magenta)
-            };
-            let prefix = if selected { "> " } else { "  " };
-            lines.push(Line::styled(format!("{}{}", prefix, text), style));
-            item_index += 1;
-        }
-        lines.push(Line::from(""));
-    }
+    render_selectable_section(
+        &mut lines,
+        &mut item_index,
+        state.selected_index,
+        "Examples:",
+        &detail.examples,
+        Some(Color::Magenta),
+        |example| match &example.description {
+            Some(desc) => format!("{} - {}", example.name, desc),
+            None => example.name.clone(),
+        },
+    );
 
-    // Actions section
-    lines.push(Line::styled("Actions:", Style::default().bold()));
-
+    // Actions section (always present)
     let action_labels = [
         "Open on crates.io",
         "Add to project",
         "Create new project from template",
     ];
-
-    for label in action_labels {
-        let selected = state.selected_index == item_index;
-        let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan).bold()
-        } else {
-            Style::default()
-        };
-        let prefix = if selected { "> " } else { "  " };
-        lines.push(Line::styled(format!("{}{}", prefix, label), style));
-        item_index += 1;
-    }
+    render_selectable_section(
+        &mut lines,
+        &mut item_index,
+        state.selected_index,
+        "Actions:",
+        &action_labels,
+        None,
+        |label| (*label).to_string(),
+    );
 
     // Sanity check
     debug_assert_eq!(
