@@ -6,7 +6,6 @@ members = [
     "src/cli-battery-pack",
     "src/error-battery-pack",
     "src/logging-battery-pack",
-    "test-bp",
 ]
 resolver = "2"
 

@@ -8,29 +8,15 @@ readme = "README.md"
 
 [package.metadata.battery]
 schema_version = 1
-# Customize how your battery pack exports crates:
-#
-# Export all dependencies (default behavior):
-# (no configuration needed)
-#
-# Export specific crates at root:
-# root = ["tokio", "serde"]
-#
-# Export with selective items:
-# [package.metadata.battery.root]
-# tokio = "*"                        # re-export everything from tokio
-# serde = ["Serialize", "Deserialize"]  # only these items
-#
-# Organize into modules:
-# [package.metadata.battery.modules]
-# async = ["tokio", "futures"]
-# http = ["reqwest", "hyper"]
-#
-# Exclude crates from export:
+
+# Optional: exclude crates from the facade
 # exclude = ["internal-helper"]
 
+# Optional: organize crates into modules
+# [package.metadata.battery.modules]
+# async = ["tokio", "futures"]
+
 [dependencies]
-battery-pack = "0.3"
 # Add your curated dependencies here:
 # tokio = { version = "1", features = ["full"] }
 # serde = { version = "1", features = ["derive"] }

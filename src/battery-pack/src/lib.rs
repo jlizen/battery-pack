@@ -14,7 +14,7 @@
 //! schema_version = 1
 //!
 //! [build-dependencies]
-//! battery-pack = "0.1"
+//! battery-pack = "0.3"
 //! ```
 //!
 //! **build.rs:**
