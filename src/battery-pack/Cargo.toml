@@ -18,6 +18,12 @@ pkg-fmt = "zip"
 [package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
 pkg-fmt = "zip"
 
+[package.metadata.battery]
+schema_version = 1
+
+[package.metadata.battery.templates]
+default = { path = "templates/default", description = "Starter template for authoring a battery pack" }
+
 [[bin]]
 name = "cargo-bp"
 path = "src/main.rs"

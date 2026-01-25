@@ -1,20 +1,33 @@
 [workspace]
-resolver = "2"
 members = [
     "src/battery-pack",
     "src/battery-pack/bphelper-build",
     "src/battery-pack/bphelper-cli",
+    "src/cli-battery-pack",
     "src/error-battery-pack",
     "src/logging-battery-pack",
-    "src/cli-battery-pack",
+    "test-bp",
 ]
+resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
+cargo-generate = "0.22"
+expect-test = "1"
 serde_json = "1"
 toml = "0.8"
-cargo-generate = "0.22"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
-expect-test = "1"
+
+[workspace.dependencies.clap]
+version = "4"
+features = ["derive"]
+
+[workspace.dependencies.reqwest]
+version = "0.12"
+features = [
+    "blocking",
+    "json",
+]
+
+[workspace.dependencies.serde]
+version = "1"
+features = ["derive"]

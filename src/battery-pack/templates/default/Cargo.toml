@@ -30,10 +30,10 @@ schema_version = 1
 # exclude = ["internal-helper"]
 
 [dependencies]
-battery-pack = "0.1"
+battery-pack = "0.3"
 # Add your curated dependencies here:
 # tokio = { version = "1", features = ["full"] }
 # serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
-battery-pack = "0.1"
+battery-pack = "0.3"
