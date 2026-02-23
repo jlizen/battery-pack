@@ -8,6 +8,7 @@ repository = "https://github.com/battery-pack-rs/battery-pack"
 keywords = ["battery-pack", "cli", "cargo"]
 
 [dependencies]
+bphelper-manifest = { path = "../bphelper-manifest", version = "0.3.0" }
 clap.workspace = true
 cargo-generate.workspace = true
 anyhow.workspace = true
@@ -23,3 +24,5 @@ ratatui = "0.29"
 crossterm = "0.28"
 open = "5"
 dialoguer = "0.11"
+syn = { version = "2", features = ["full"] }
+toml_edit = "0.22"

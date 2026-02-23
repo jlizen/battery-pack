@@ -1,11 +1,8 @@
 [workspace]
 members = [
     "src/battery-pack",
-    "src/battery-pack/bphelper-build",
     "src/battery-pack/bphelper-cli",
-    "src/cli-battery-pack",
-    "src/error-battery-pack",
-    "src/logging-battery-pack",
+    "src/battery-pack/bphelper-manifest",
 ]
 resolver = "2"
 

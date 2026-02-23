@@ -5,21 +5,21 @@ edition = "2024"
 description = "{{description}}"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-
-[package.metadata.battery]
-schema_version = 1
-
-# Optional: exclude crates from the facade
-# exclude = ["internal-helper"]
-
-# Optional: organize crates into modules
-# [package.metadata.battery.modules]
-# async = ["tokio", "futures"]
+keywords = ["battery-pack"]
 
 [dependencies]
-# Add your curated dependencies here:
-# tokio = { version = "1", features = ["full"] }
-# serde = { version = "1", features = ["derive"] }
-
-[build-dependencies]
 battery-pack = "0.3"
+
+[dev-dependencies]
+# Add your curated dependencies here:
+# clap = { version = "4", features = ["derive"] }
+# serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Optional: narrow the default set and define named sets
+# [package.metadata.battery-pack]
+# default = ["clap", "serde"]
+#
+# [package.metadata.battery-pack.sets]
+# json = { serde_json = {} }
+# fancy = { clap = { features = ["color"] } }

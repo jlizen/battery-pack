@@ -53,14 +53,35 @@ pub enum BpCommands {
         path: Option<String>,
     },
 
-    /// Add a battery pack as a dependency
+    /// Add a battery pack and sync its dependencies
     Add {
         /// Name of the battery pack (e.g., "cli" resolves to "cli-battery-pack")
         battery_pack: String,
 
-        /// Features to enable
-        #[arg(long, short = 'F')]
-        features: Vec<String>,
+        /// Named sets to enable (in addition to the default set)
+        #[arg(long, short = 'w')]
+        with: Vec<String>,
+
+        /// Sync all dev-dependencies regardless of default set
+        #[arg(long)]
+        all: bool,
+
+        /// Use a local path instead of downloading from crates.io
+        #[arg(long)]
+        path: Option<String>,
+    },
+
+    /// Update dependencies from installed battery packs
+    Sync,
+
+    /// Enable a named set from a battery pack
+    Enable {
+        /// Name of the set to enable
+        set_name: String,
+
+        /// Battery pack to search (optional — searches all installed if omitted)
+        #[arg(long)]
+        battery_pack: Option<String>,
     },
 
     /// List available battery packs on crates.io
@@ -102,8 +123,15 @@ pub fn main() -> Result<()> {
             } => new_from_battery_pack(&battery_pack, name, template, path),
             BpCommands::Add {
                 battery_pack,
-                features,
-            } => add_battery_pack(&battery_pack, &features),
+                with,
+                all,
+                path,
+            } => add_battery_pack(&battery_pack, &with, all, path.as_deref()),
+            BpCommands::Sync => sync_battery_packs(),
+            BpCommands::Enable {
+                set_name,
+                battery_pack,
+            } => enable_set(&set_name, battery_pack.as_deref()),
             BpCommands::List {
                 filter,
                 non_interactive,
@@ -328,29 +356,666 @@ fn new_from_battery_pack(
     generate_from_path(&crate_dir, &template_path, name)
 }
 
-fn add_battery_pack(name: &str, features: &[String]) -> Result<()> {
+fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&str>) -> Result<()> {
     let crate_name = resolve_crate_name(name);
-    let short = short_name(&crate_name);
 
-    // Verify the crate exists on crates.io
-    lookup_crate(&crate_name)?;
+    // Get battery pack spec: either from local path or by downloading
+    let (bp_spec, bp_version) = if let Some(local_path) = path {
+        let manifest_path = Path::new(local_path).join("Cargo.toml");
+        let manifest_content = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+        let spec = bphelper_manifest::parse_battery_pack(&manifest_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse battery pack: {e}"))?;
+        let version = spec.version.clone();
+        (spec, version)
+    } else {
+        let crate_info = lookup_crate(&crate_name)?;
+        let temp_dir = download_and_extract_crate(&crate_name, &crate_info.version)?;
+        let crate_dir = temp_dir
+            .path()
+            .join(format!("{}-{}", crate_name, crate_info.version));
+        let manifest_path = crate_dir.join("Cargo.toml");
+        let manifest_content = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+        let spec = bphelper_manifest::parse_battery_pack(&manifest_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse battery pack: {e}"))?;
+        (spec, crate_info.version)
+    };
 
-    // Build cargo add command: cargo add cli-battery-pack --rename cli
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.arg("add").arg(&crate_name);
+    // Determine which crates to sync
+    let active_sets = if all {
+        vec!["default".to_string()]
+    } else {
+        let mut sets = vec!["default".to_string()];
+        sets.extend(with_sets.iter().cloned());
+        sets
+    };
 
-    // Rename to the short name (e.g., cli-battery-pack -> cli)
-    cmd.arg("--rename").arg(short);
+    let crates_to_sync = if all {
+        bp_spec.resolve_all()
+    } else {
+        bp_spec.resolve_crates(&active_sets)
+    };
 
-    // Add features if specified
-    for feature in features {
-        cmd.arg("--features").arg(feature);
+    // Read the user's Cargo.toml
+    let user_manifest_path = find_user_manifest()?;
+    let user_manifest_content =
+        std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
+    let mut user_doc: toml_edit::DocumentMut = user_manifest_content
+        .parse()
+        .context("Failed to parse Cargo.toml")?;
+
+    // Detect workspace
+    let workspace_manifest = find_workspace_manifest(&user_manifest_path)?;
+
+    // Add battery pack to [build-dependencies]
+    let build_deps =
+        user_doc["build-dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    if let Some(table) = build_deps.as_table_mut() {
+        if path.is_some() {
+            // Local path dependency
+            let mut dep = toml_edit::InlineTable::new();
+            dep.insert("path", toml_edit::Value::from(path.unwrap()));
+            table.insert(
+                &crate_name,
+                toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+            );
+        } else if workspace_manifest.is_some() {
+            // Workspace: add to workspace deps, use workspace = true here
+            let mut dep = toml_edit::InlineTable::new();
+            dep.insert("workspace", toml_edit::Value::from(true));
+            table.insert(
+                &crate_name,
+                toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+            );
+        } else {
+            table.insert(&crate_name, toml_edit::value(&bp_version));
+        }
     }
 
-    let status = cmd.status().context("Failed to run cargo add")?;
+    // Sync crate dependencies
+    if let Some(ref ws_path) = workspace_manifest {
+        // Workspace mode: add to [workspace.dependencies], reference with workspace = true
+        let ws_content =
+            std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
+        let mut ws_doc: toml_edit::DocumentMut = ws_content
+            .parse()
+            .context("Failed to parse workspace Cargo.toml")?;
 
-    if !status.success() {
-        bail!("cargo add failed");
+        // Add battery pack to workspace.dependencies too
+        let ws_deps = ws_doc["workspace"]["dependencies"]
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        if let Some(ws_table) = ws_deps.as_table_mut() {
+            // Add battery pack itself
+            if path.is_some() {
+                let mut dep = toml_edit::InlineTable::new();
+                dep.insert("path", toml_edit::Value::from(path.unwrap()));
+                ws_table.insert(
+                    &crate_name,
+                    toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+                );
+            } else {
+                ws_table.insert(&crate_name, toml_edit::value(&bp_version));
+            }
+
+            // Add each synced crate to workspace deps
+            for (dep_name, dep_spec) in &crates_to_sync {
+                add_dep_to_table(ws_table, dep_name, dep_spec);
+            }
+        }
+        std::fs::write(ws_path, ws_doc.to_string())
+            .context("Failed to write workspace Cargo.toml")?;
+
+        // In the crate's Cargo.toml, reference with workspace = true
+        let deps =
+            user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        if let Some(table) = deps.as_table_mut() {
+            for dep_name in crates_to_sync.keys() {
+                let mut dep = toml_edit::InlineTable::new();
+                dep.insert("workspace", toml_edit::Value::from(true));
+                table.insert(
+                    dep_name,
+                    toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+                );
+            }
+        }
+    } else {
+        // Non-workspace: add directly to [dependencies]
+        let deps =
+            user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        if let Some(table) = deps.as_table_mut() {
+            for (dep_name, dep_spec) in &crates_to_sync {
+                add_dep_to_table(table, dep_name, dep_spec);
+            }
+        }
+    }
+
+    // Record active sets in [package.metadata.battery-pack.<crate-name>]
+    let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&crate_name];
+    let mut sets_array = toml_edit::Array::new();
+    if all {
+        sets_array.push("all");
+    } else {
+        for set in &active_sets {
+            sets_array.push(set.as_str());
+        }
+    }
+    *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
+    bp_meta["sets"] = toml_edit::value(sets_array);
+
+    // Write the updated user Cargo.toml
+    std::fs::write(&user_manifest_path, user_doc.to_string())
+        .context("Failed to write Cargo.toml")?;
+
+    // Create/modify build.rs
+    let build_rs_path = user_manifest_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("build.rs");
+    update_build_rs(&build_rs_path, &crate_name)?;
+
+    println!(
+        "Added {} with {} crate(s)",
+        crate_name,
+        crates_to_sync.len()
+    );
+    for dep_name in crates_to_sync.keys() {
+        println!("  + {}", dep_name);
+    }
+
+    Ok(())
+}
+
+fn sync_battery_packs() -> Result<()> {
+    let user_manifest_path = find_user_manifest()?;
+    let user_manifest_content =
+        std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
+
+    // Find installed battery packs from [build-dependencies]
+    let raw: toml::Value =
+        toml::from_str(&user_manifest_content).context("Failed to parse Cargo.toml")?;
+
+    let build_deps = raw
+        .get("build-dependencies")
+        .and_then(|bd| bd.as_table())
+        .cloned()
+        .unwrap_or_default();
+
+    let bp_names: Vec<String> = build_deps
+        .keys()
+        .filter(|k| k.ends_with("-battery-pack") || *k == "battery-pack")
+        .cloned()
+        .collect();
+
+    if bp_names.is_empty() {
+        println!("No battery packs installed.");
+        return Ok(());
+    }
+
+    let mut user_doc: toml_edit::DocumentMut = user_manifest_content
+        .parse()
+        .context("Failed to parse Cargo.toml")?;
+
+    let workspace_manifest = find_workspace_manifest(&user_manifest_path)?;
+    let mut total_changes = 0;
+
+    for bp_name in &bp_names {
+        // Get the battery pack spec
+        let bp_spec = fetch_battery_pack_spec(bp_name, &build_deps)?;
+
+        // Read active sets from user metadata
+        let active_sets = read_active_sets(&user_manifest_content, bp_name);
+
+        let expected = if active_sets.iter().any(|s| s == "all") {
+            bp_spec.resolve_all()
+        } else {
+            bp_spec.resolve_crates(&active_sets)
+        };
+
+        // Sync each crate
+        if let Some(ref ws_path) = workspace_manifest {
+            let ws_content =
+                std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
+            let mut ws_doc: toml_edit::DocumentMut = ws_content
+                .parse()
+                .context("Failed to parse workspace Cargo.toml")?;
+
+            let ws_deps = ws_doc["workspace"]["dependencies"]
+                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            if let Some(ws_table) = ws_deps.as_table_mut() {
+                for (dep_name, dep_spec) in &expected {
+                    if sync_dep_in_table(ws_table, dep_name, dep_spec) {
+                        total_changes += 1;
+                        println!("  ~ {} (updated in workspace)", dep_name);
+                    }
+                }
+            }
+            std::fs::write(ws_path, ws_doc.to_string())
+                .context("Failed to write workspace Cargo.toml")?;
+
+            // Ensure crate-level references exist
+            let deps =
+                user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            if let Some(table) = deps.as_table_mut() {
+                for dep_name in expected.keys() {
+                    if !table.contains_key(dep_name) {
+                        let mut dep = toml_edit::InlineTable::new();
+                        dep.insert("workspace", toml_edit::Value::from(true));
+                        table.insert(
+                            dep_name,
+                            toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+                        );
+                        total_changes += 1;
+                        println!("  + {} (added workspace reference)", dep_name);
+                    }
+                }
+            }
+        } else {
+            let deps =
+                user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            if let Some(table) = deps.as_table_mut() {
+                for (dep_name, dep_spec) in &expected {
+                    if !table.contains_key(dep_name) {
+                        add_dep_to_table(table, dep_name, dep_spec);
+                        total_changes += 1;
+                        println!("  + {}", dep_name);
+                    } else if sync_dep_in_table(table, dep_name, dep_spec) {
+                        total_changes += 1;
+                        println!("  ~ {}", dep_name);
+                    }
+                }
+            }
+        }
+    }
+
+    std::fs::write(&user_manifest_path, user_doc.to_string())
+        .context("Failed to write Cargo.toml")?;
+
+    if total_changes == 0 {
+        println!("All dependencies are up to date.");
+    } else {
+        println!("Synced {} change(s).", total_changes);
+    }
+
+    Ok(())
+}
+
+fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
+    let user_manifest_path = find_user_manifest()?;
+    let user_manifest_content =
+        std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
+
+    let raw: toml::Value =
+        toml::from_str(&user_manifest_content).context("Failed to parse Cargo.toml")?;
+
+    let build_deps = raw
+        .get("build-dependencies")
+        .and_then(|bd| bd.as_table())
+        .cloned()
+        .unwrap_or_default();
+
+    // Find which battery pack has this set
+    let bp_name = if let Some(name) = battery_pack {
+        resolve_crate_name(name)
+    } else {
+        // Search all installed battery packs
+        let bp_names: Vec<String> = build_deps
+            .keys()
+            .filter(|k| k.ends_with("-battery-pack") || *k == "battery-pack")
+            .cloned()
+            .collect();
+
+        let mut found = None;
+        for name in &bp_names {
+            let spec = fetch_battery_pack_spec(name, &build_deps)?;
+            if spec.sets.contains_key(set_name) {
+                found = Some(name.clone());
+                break;
+            }
+        }
+        found.ok_or_else(|| {
+            anyhow::anyhow!("No installed battery pack defines set '{}'", set_name)
+        })?
+    };
+
+    let bp_spec = fetch_battery_pack_spec(&bp_name, &build_deps)?;
+
+    if !bp_spec.sets.contains_key(set_name) {
+        let available: Vec<_> = bp_spec.sets.keys().collect();
+        bail!(
+            "Battery pack '{}' has no set '{}'. Available: {:?}",
+            bp_name,
+            set_name,
+            available
+        );
+    }
+
+    // Add set to active sets
+    let mut active_sets = read_active_sets(&user_manifest_content, &bp_name);
+    if active_sets.contains(&set_name.to_string()) {
+        println!("Set '{}' is already active for {}.", set_name, bp_name);
+        return Ok(());
+    }
+    active_sets.push(set_name.to_string());
+
+    // Resolve what this changes
+    let crates_to_sync = bp_spec.resolve_crates(&active_sets);
+
+    // Update user manifest
+    let mut user_doc: toml_edit::DocumentMut = user_manifest_content
+        .parse()
+        .context("Failed to parse Cargo.toml")?;
+
+    let workspace_manifest = find_workspace_manifest(&user_manifest_path)?;
+
+    // Sync the new crates
+    if let Some(ref ws_path) = workspace_manifest {
+        let ws_content =
+            std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
+        let mut ws_doc: toml_edit::DocumentMut = ws_content
+            .parse()
+            .context("Failed to parse workspace Cargo.toml")?;
+
+        let ws_deps = ws_doc["workspace"]["dependencies"]
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        if let Some(ws_table) = ws_deps.as_table_mut() {
+            for (dep_name, dep_spec) in &crates_to_sync {
+                add_dep_to_table(ws_table, dep_name, dep_spec);
+            }
+        }
+        std::fs::write(ws_path, ws_doc.to_string())
+            .context("Failed to write workspace Cargo.toml")?;
+
+        let deps =
+            user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        if let Some(table) = deps.as_table_mut() {
+            for dep_name in crates_to_sync.keys() {
+                if !table.contains_key(dep_name) {
+                    let mut dep = toml_edit::InlineTable::new();
+                    dep.insert("workspace", toml_edit::Value::from(true));
+                    table.insert(
+                        dep_name,
+                        toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+                    );
+                }
+            }
+        }
+    } else {
+        let deps =
+            user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        if let Some(table) = deps.as_table_mut() {
+            for (dep_name, dep_spec) in &crates_to_sync {
+                if !table.contains_key(dep_name) {
+                    add_dep_to_table(table, dep_name, dep_spec);
+                }
+            }
+        }
+    }
+
+    // Update active sets in metadata
+    let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&bp_name];
+    let mut sets_array = toml_edit::Array::new();
+    for set in &active_sets {
+        sets_array.push(set.as_str());
+    }
+    *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
+    bp_meta["sets"] = toml_edit::value(sets_array);
+
+    std::fs::write(&user_manifest_path, user_doc.to_string())
+        .context("Failed to write Cargo.toml")?;
+
+    println!("Enabled set '{}' from {}", set_name, bp_name);
+    Ok(())
+}
+
+// ============================================================================
+// Cargo.toml manipulation helpers
+// ============================================================================
+
+/// Find the user's Cargo.toml in the current directory.
+fn find_user_manifest() -> Result<std::path::PathBuf> {
+    let path = std::path::PathBuf::from("Cargo.toml");
+    if path.exists() {
+        Ok(path)
+    } else {
+        bail!("No Cargo.toml found in the current directory");
+    }
+}
+
+/// Find the workspace root Cargo.toml, if any.
+/// Returns None if the crate is not in a workspace.
+fn find_workspace_manifest(crate_manifest: &Path) -> Result<Option<std::path::PathBuf>> {
+    let crate_dir = crate_manifest
+        .parent()
+        .unwrap_or(Path::new("."))
+        .canonicalize()
+        .context("Failed to resolve crate directory")?;
+
+    // Walk up from the crate directory looking for a workspace root
+    let mut dir = crate_dir.clone();
+    loop {
+        let candidate = dir.join("Cargo.toml");
+        if candidate.exists() && candidate != crate_dir.join("Cargo.toml") {
+            let content = std::fs::read_to_string(&candidate)?;
+            if content.contains("[workspace]") {
+                return Ok(Some(candidate));
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+
+    // Also check if the crate's own Cargo.toml has a [workspace] section
+    // (single-crate workspace) — in that case we don't use workspace deps
+    Ok(None)
+}
+
+/// Add a dependency to a toml_edit table (non-workspace mode).
+fn add_dep_to_table(table: &mut toml_edit::Table, name: &str, spec: &bphelper_manifest::DepSpec) {
+    if spec.features.is_empty() {
+        table.insert(name, toml_edit::value(&spec.version));
+    } else {
+        let mut dep = toml_edit::InlineTable::new();
+        dep.insert("version", toml_edit::Value::from(spec.version.as_str()));
+        let mut features = toml_edit::Array::new();
+        for feat in &spec.features {
+            features.push(feat.as_str());
+        }
+        dep.insert("features", toml_edit::Value::Array(features));
+        table.insert(
+            name,
+            toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+        );
+    }
+}
+
+/// Sync a dependency in-place: update version if behind, add missing features.
+/// Returns true if changes were made.
+fn sync_dep_in_table(
+    table: &mut toml_edit::Table,
+    name: &str,
+    spec: &bphelper_manifest::DepSpec,
+) -> bool {
+    let Some(existing) = table.get_mut(name) else {
+        // Not present — add it
+        add_dep_to_table(table, name, spec);
+        return true;
+    };
+
+    let mut changed = false;
+
+    match existing {
+        toml_edit::Item::Value(toml_edit::Value::String(version_str)) => {
+            // Simple version string — check if we need to upgrade or add features
+            let current = version_str.value().to_string();
+            if !spec.version.is_empty() && current != spec.version {
+                *version_str = toml_edit::Formatted::new(spec.version.clone());
+                changed = true;
+            }
+            if !spec.features.is_empty() {
+                // Need to convert from simple string to table format
+                add_dep_to_table(table, name, spec);
+                changed = true;
+            }
+        }
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(inline)) => {
+            // Check version
+            if let Some(toml_edit::Value::String(v)) = inline.get_mut("version") {
+                if !spec.version.is_empty() && v.value() != &spec.version {
+                    *v = toml_edit::Formatted::new(spec.version.clone());
+                    changed = true;
+                }
+            }
+            // Check features — add missing ones
+            if !spec.features.is_empty() {
+                let existing_features: Vec<String> = inline
+                    .get("features")
+                    .and_then(|f| f.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let mut needs_update = false;
+                let mut all_features = existing_features.clone();
+                for feat in &spec.features {
+                    if !existing_features.contains(feat) {
+                        all_features.push(feat.clone());
+                        needs_update = true;
+                    }
+                }
+
+                if needs_update {
+                    let mut arr = toml_edit::Array::new();
+                    for f in &all_features {
+                        arr.push(f.as_str());
+                    }
+                    inline.insert("features", toml_edit::Value::Array(arr));
+                    changed = true;
+                }
+            }
+        }
+        _ => {}
+    }
+
+    changed
+}
+
+/// Read active sets for a battery pack from user's metadata.
+fn read_active_sets(manifest_content: &str, bp_name: &str) -> Vec<String> {
+    let raw: toml::Value = match toml::from_str(manifest_content) {
+        Ok(v) => v,
+        Err(_) => return vec!["default".to_string()],
+    };
+
+    raw.get("package")
+        .and_then(|p| p.get("metadata"))
+        .and_then(|m| m.get("battery-pack"))
+        .and_then(|bp| bp.get(bp_name))
+        .and_then(|entry| entry.get("sets"))
+        .and_then(|sets| sets.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_else(|| vec!["default".to_string()])
+}
+
+/// Fetch the battery pack spec by downloading its tarball.
+fn fetch_battery_pack_spec(
+    bp_name: &str,
+    _build_deps: &toml::map::Map<String, toml::Value>,
+) -> Result<bphelper_manifest::BatteryPackSpec> {
+    // TODO: support local path dependencies from build_deps
+    let crate_info = lookup_crate(bp_name)?;
+    let temp_dir = download_and_extract_crate(bp_name, &crate_info.version)?;
+    let crate_dir = temp_dir
+        .path()
+        .join(format!("{}-{}", bp_name, crate_info.version));
+    let manifest_path = crate_dir.join("Cargo.toml");
+    let manifest_content = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+
+    bphelper_manifest::parse_battery_pack(&manifest_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse battery pack '{}': {}", bp_name, e))
+}
+
+// ============================================================================
+// build.rs manipulation
+// ============================================================================
+
+/// Update or create build.rs to include a validate() call.
+fn update_build_rs(build_rs_path: &Path, crate_name: &str) -> Result<()> {
+    let crate_ident = crate_name.replace('-', "_");
+    let validate_call = format!("{}::validate();", crate_ident);
+
+    if build_rs_path.exists() {
+        let content = std::fs::read_to_string(build_rs_path).context("Failed to read build.rs")?;
+
+        // Check if validate call is already present
+        if content.contains(&validate_call) {
+            return Ok(());
+        }
+
+        // Verify the file parses as valid Rust with syn
+        let file: syn::File = syn::parse_str(&content).context("Failed to parse build.rs")?;
+
+        // Check that a main function exists
+        let has_main = file
+            .items
+            .iter()
+            .any(|item| matches!(item, syn::Item::Fn(func) if func.sig.ident == "main"));
+
+        if has_main {
+            // Find the closing brace of main using string manipulation
+            let lines: Vec<&str> = content.lines().collect();
+            let mut insert_line = None;
+            let mut brace_depth: i32 = 0;
+            let mut in_main = false;
+
+            for (i, line) in lines.iter().enumerate() {
+                if line.contains("fn main") {
+                    in_main = true;
+                    brace_depth = 0;
+                }
+                if in_main {
+                    for ch in line.chars() {
+                        if ch == '{' {
+                            brace_depth += 1;
+                        } else if ch == '}' {
+                            brace_depth -= 1;
+                            if brace_depth == 0 {
+                                insert_line = Some(i);
+                                in_main = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(line_idx) = insert_line {
+                let mut new_lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+                new_lines.insert(line_idx, format!("    {}", validate_call));
+                std::fs::write(build_rs_path, new_lines.join("\n") + "\n")
+                    .context("Failed to write build.rs")?;
+                return Ok(());
+            }
+        }
+
+        // Fallback: no main function found or couldn't locate closing brace
+        bail!(
+            "Could not find fn main() in build.rs. Please add `{}` manually.",
+            validate_call
+        );
+    } else {
+        // Create new build.rs
+        let content = format!("fn main() {{\n    {}\n}}\n", validate_call);
+        std::fs::write(build_rs_path, content).context("Failed to create build.rs")?;
     }
 
     Ok(())
@@ -714,12 +1379,7 @@ pub fn fetch_battery_pack_detail(name: &str, path: Option<&str>) -> Result<Batte
     // Fetch owners from crates.io
     let owners = fetch_owners(&crate_name)?;
 
-    build_battery_pack_detail(
-        &crate_dir,
-        crate_name,
-        crate_info.version,
-        owners,
-    )
+    build_battery_pack_detail(&crate_dir, crate_name, crate_info.version, owners)
 }
 
 /// Fetch detailed battery pack info from a local path
@@ -1023,22 +1683,14 @@ fn fetch_github_tree(repository: &str) -> Option<Vec<String>> {
     let tree_response: GitHubTreeResponse = response.json().ok()?;
 
     // Extract all paths (both blobs/files and trees/directories)
-    Some(
-        tree_response
-            .tree
-            .into_iter()
-            .map(|e| e.path)
-            .collect(),
-    )
+    Some(tree_response.tree.into_iter().map(|e| e.path).collect())
 }
 
 /// Find the full repository path for an example file.
 /// Searches the tree for a file matching "examples/{name}.rs".
 fn find_example_path(tree: &[String], example_name: &str) -> Option<String> {
     let suffix = format!("examples/{}.rs", example_name);
-    tree.iter()
-        .find(|path| path.ends_with(&suffix))
-        .cloned()
+    tree.iter().find(|path| path.ends_with(&suffix)).cloned()
 }
 
 /// Find the full repository path for a template directory.

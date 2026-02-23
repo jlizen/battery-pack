@@ -29,8 +29,8 @@ name = "cargo-bp"
 path = "src/main.rs"
 
 [dependencies]
-bphelper-build = { path = "bphelper-build", version = "0.3.0" }
 bphelper-cli = { path = "bphelper-cli", version = "0.3.0" }
+bphelper-manifest = { path = "bphelper-manifest", version = "0.3.0" }
 anyhow.workspace = true
 
 [dev-dependencies]
