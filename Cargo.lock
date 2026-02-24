@@ -187,6 +187,7 @@ dependencies = [
  "open",
  "ratatui",
  "reqwest",
+ "semver",
  "serde",
  "syn",
  "tar",

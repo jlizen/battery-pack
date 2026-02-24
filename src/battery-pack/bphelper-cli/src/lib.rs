@@ -389,6 +389,11 @@ fn new_from_battery_pack(
 
 // [impl cli.add.register]
 // [impl cli.add.dep-kind]
+// [impl manifest.register.location]
+// [impl manifest.register.format]
+// [impl manifest.features.storage]
+// [impl manifest.deps.add]
+// [impl manifest.deps.version-features]
 fn add_battery_pack(
     name: &str,
     with_features: &[String],
@@ -451,10 +456,12 @@ fn add_battery_pack(
     let user_manifest_path = find_user_manifest()?;
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
+    // [impl manifest.toml.preserve]
     let mut user_doc: toml_edit::DocumentMut = user_manifest_content
         .parse()
         .context("Failed to parse Cargo.toml")?;
 
+    // [impl manifest.register.workspace-default]
     let workspace_manifest = find_workspace_manifest(&user_manifest_path)?;
 
     // Add battery pack to [build-dependencies]
@@ -480,10 +487,12 @@ fn add_battery_pack(
         }
     }
 
+    // [impl manifest.deps.workspace]
     // Add crate dependencies + workspace deps (including the battery pack itself)
     if let Some(ref ws_path) = workspace_manifest {
         let ws_content =
             std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
+        // [impl manifest.toml.preserve]
         let mut ws_doc: toml_edit::DocumentMut = ws_content
             .parse()
             .context("Failed to parse workspace Cargo.toml")?;
@@ -507,6 +516,7 @@ fn add_battery_pack(
                 add_dep_to_table(ws_table, dep_name, dep_spec);
             }
         }
+        // [impl manifest.toml.preserve]
         std::fs::write(ws_path, ws_doc.to_string())
             .context("Failed to write workspace Cargo.toml")?;
 
@@ -523,6 +533,7 @@ fn add_battery_pack(
             }
         }
     } else {
+        // [impl manifest.deps.no-workspace]
         let deps =
             user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
         if let Some(table) = deps.as_table_mut() {
@@ -532,6 +543,9 @@ fn add_battery_pack(
         }
     }
 
+    // [impl manifest.register.location]
+    // [impl manifest.register.format]
+    // [impl manifest.features.storage]
     // Record active features in [package.metadata.battery-pack.<crate-name>]
     let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&crate_name];
     let mut features_array = toml_edit::Array::new();
@@ -542,6 +556,7 @@ fn add_battery_pack(
     bp_meta["features"] = toml_edit::value(features_array);
 
     // Write the final Cargo.toml
+    // [impl manifest.toml.preserve]
     std::fs::write(&user_manifest_path, user_doc.to_string())
         .context("Failed to write Cargo.toml")?;
 
@@ -580,6 +595,7 @@ fn sync_battery_packs() -> Result<()> {
         return Ok(());
     }
 
+    // [impl manifest.toml.preserve]
     let mut user_doc: toml_edit::DocumentMut = user_manifest_content
         .parse()
         .context("Failed to parse Cargo.toml")?;
@@ -601,10 +617,12 @@ fn sync_battery_packs() -> Result<()> {
             bp_spec.resolve_crates(&str_features)
         };
 
+        // [impl manifest.deps.workspace]
         // Sync each crate
         if let Some(ref ws_path) = workspace_manifest {
             let ws_content =
                 std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
+            // [impl manifest.toml.preserve]
             let mut ws_doc: toml_edit::DocumentMut = ws_content
                 .parse()
                 .context("Failed to parse workspace Cargo.toml")?;
@@ -619,6 +637,7 @@ fn sync_battery_packs() -> Result<()> {
                     }
                 }
             }
+            // [impl manifest.toml.preserve]
             std::fs::write(ws_path, ws_doc.to_string())
                 .context("Failed to write workspace Cargo.toml")?;
 
@@ -640,6 +659,7 @@ fn sync_battery_packs() -> Result<()> {
                 }
             }
         } else {
+            // [impl manifest.deps.no-workspace]
             let deps =
                 user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
             if let Some(table) = deps.as_table_mut() {
@@ -657,6 +677,7 @@ fn sync_battery_packs() -> Result<()> {
         }
     }
 
+    // [impl manifest.toml.preserve]
     std::fs::write(&user_manifest_path, user_doc.to_string())
         .context("Failed to write Cargo.toml")?;
 
@@ -910,7 +931,8 @@ fn find_user_manifest() -> Result<std::path::PathBuf> {
 /// Extract battery pack crate names from a parsed Cargo.toml.
 ///
 /// Filters `[build-dependencies]` for entries ending in `-battery-pack` or equal to `"battery-pack"`.
-fn find_installed_bp_names(manifest_content: &str) -> Result<Vec<String>> {
+// [impl manifest.register.location]
+pub fn find_installed_bp_names(manifest_content: &str) -> Result<Vec<String>> {
     let raw: toml::Value =
         toml::from_str(manifest_content).context("Failed to parse Cargo.toml")?;
 
@@ -929,6 +951,8 @@ fn find_installed_bp_names(manifest_content: &str) -> Result<Vec<String>> {
 
 /// Find the workspace root Cargo.toml, if any.
 /// Returns None if the crate is not in a workspace.
+// [impl manifest.register.workspace-default]
+// [impl manifest.register.both-levels]
 fn find_workspace_manifest(crate_manifest: &Path) -> Result<Option<std::path::PathBuf>> {
     let parent = crate_manifest.parent().unwrap_or(Path::new("."));
     let parent = if parent.as_os_str().is_empty() {
@@ -961,7 +985,13 @@ fn find_workspace_manifest(crate_manifest: &Path) -> Result<Option<std::path::Pa
 }
 
 /// Add a dependency to a toml_edit table (non-workspace mode).
-fn add_dep_to_table(table: &mut toml_edit::Table, name: &str, spec: &bphelper_manifest::CrateSpec) {
+// [impl manifest.deps.add]
+// [impl manifest.deps.version-features]
+pub fn add_dep_to_table(
+    table: &mut toml_edit::Table,
+    name: &str,
+    spec: &bphelper_manifest::CrateSpec,
+) {
     if spec.features.is_empty() {
         table.insert(name, toml_edit::value(&spec.version));
     } else {
@@ -981,7 +1011,8 @@ fn add_dep_to_table(table: &mut toml_edit::Table, name: &str, spec: &bphelper_ma
 
 /// Sync a dependency in-place: update version if behind, add missing features.
 /// Returns true if changes were made.
-fn sync_dep_in_table(
+// [impl manifest.deps.existing]
+pub fn sync_dep_in_table(
     table: &mut toml_edit::Table,
     name: &str,
     spec: &bphelper_manifest::CrateSpec,
@@ -1054,7 +1085,9 @@ fn sync_dep_in_table(
 }
 
 /// Read active features for a battery pack from user's metadata.
-fn read_active_features(manifest_content: &str, bp_name: &str) -> Vec<String> {
+// [impl manifest.features.default-implicit]
+// [impl manifest.features.short-form]
+pub fn read_active_features(manifest_content: &str, bp_name: &str) -> Vec<String> {
     let raw: toml::Value = match toml::from_str(manifest_content) {
         Ok(v) => v,
         Err(_) => return vec!["default".to_string()],

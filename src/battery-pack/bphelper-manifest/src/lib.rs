@@ -225,6 +225,14 @@ impl BatteryPackSpec {
             );
         }
 
+        // [impl format.crate.repository]
+        if self.repository.is_none() {
+            report.warning(
+                "format.crate.repository",
+                "battery pack should set the `repository` field for linking to examples and templates",
+            );
+        }
+
         // [impl format.features.grouping]
         for (feature_name, crate_names) in &self.features {
             for crate_name in crate_names {
@@ -405,6 +413,146 @@ fn glob_match_inner(pat: &[char], txt: &[char]) -> bool {
         (Some(a), Some(b)) if a == b => glob_match_inner(&pat[1..], &txt[1..]),
         _ => false,
     }
+}
+
+// ============================================================================
+// Cross-pack merging
+// ============================================================================
+
+/// A crate spec produced by merging the same crate across multiple battery packs.
+///
+/// Unlike `CrateSpec` which has a single `dep_kind`, a merged spec may need to
+/// appear in multiple dependency sections (e.g., both `[dev-dependencies]` and
+/// `[build-dependencies]`).
+#[derive(Debug, Clone)]
+pub struct MergedCrateSpec {
+    /// Recommended version (highest wins across all packs).
+    pub version: String,
+    /// Union of all recommended Cargo features.
+    pub features: Vec<String>,
+    /// Which dependency sections this crate should be added to.
+    /// Usually contains a single element. Contains two elements
+    /// when one pack lists it as dev and another as build.
+    pub dep_kinds: Vec<DepKind>,
+    /// Whether this crate is optional.
+    pub optional: bool,
+}
+
+/// Merge crate specs from multiple battery packs.
+///
+/// When the same crate appears in multiple packs, applies merging rules:
+/// - Version: highest wins, even across major versions
+///   (`manifest.merge.version`)
+/// - Features: union all (`manifest.merge.features`)
+/// - Dep kind: Normal wins (widest scope); if dev vs build conflict,
+///   adds to both sections (`manifest.merge.dep-kind`)
+// [impl manifest.merge.version]
+// [impl manifest.merge.features]
+// [impl manifest.merge.dep-kind]
+pub fn merge_crate_specs(
+    specs: &[BTreeMap<String, CrateSpec>],
+) -> BTreeMap<String, MergedCrateSpec> {
+    let mut merged: BTreeMap<String, MergedCrateSpec> = BTreeMap::new();
+
+    for pack in specs {
+        for (name, spec) in pack {
+            match merged.get_mut(name) {
+                Some(existing) => {
+                    // Version: highest wins
+                    if compare_versions(&spec.version, &existing.version)
+                        == std::cmp::Ordering::Greater
+                    {
+                        existing.version = spec.version.clone();
+                    }
+
+                    // Features: union
+                    for feat in &spec.features {
+                        if !existing.features.contains(feat) {
+                            existing.features.push(feat.clone());
+                        }
+                    }
+
+                    // Dep kind: merge
+                    existing.dep_kinds = merge_dep_kinds(&existing.dep_kinds, spec.dep_kind);
+
+                    // Optional: if any pack makes it non-optional, it's non-optional
+                    if !spec.optional {
+                        existing.optional = false;
+                    }
+                }
+                None => {
+                    merged.insert(
+                        name.clone(),
+                        MergedCrateSpec {
+                            version: spec.version.clone(),
+                            features: spec.features.clone(),
+                            dep_kinds: vec![spec.dep_kind],
+                            optional: spec.optional,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    merged
+}
+
+/// Compare two version strings using semver-like ordering.
+///
+/// Parses dot-separated numeric components (e.g., "1.2.3") and compares
+/// them left-to-right. Non-numeric or missing components are compared
+/// as strings as a fallback. The highest version wins, even across
+/// major versions.
+fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_parts: Vec<&str> = a.split('.').collect();
+    let b_parts: Vec<&str> = b.split('.').collect();
+
+    let max_len = a_parts.len().max(b_parts.len());
+
+    for i in 0..max_len {
+        let a_part = a_parts.get(i).copied().unwrap_or("0");
+        let b_part = b_parts.get(i).copied().unwrap_or("0");
+
+        // Try numeric comparison first
+        match (a_part.parse::<u64>(), b_part.parse::<u64>()) {
+            (Ok(a_num), Ok(b_num)) => {
+                let ord = a_num.cmp(&b_num);
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+            }
+            // Fallback to string comparison for non-numeric parts
+            _ => {
+                let ord = a_part.cmp(b_part);
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+            }
+        }
+    }
+
+    std::cmp::Ordering::Equal
+}
+
+/// Merge dependency kinds according to the spec rules.
+///
+/// - If any side includes `Normal`, the result is `[Normal]` (widest scope).
+/// - If one side is `Dev` and the other is `Build`, the result is `[Dev, Build]`.
+/// - Otherwise, the existing set is returned unchanged.
+fn merge_dep_kinds(existing: &[DepKind], incoming: DepKind) -> Vec<DepKind> {
+    // If Normal is already present or incoming, Normal wins
+    if existing.contains(&DepKind::Normal) || incoming == DepKind::Normal {
+        return vec![DepKind::Normal];
+    }
+
+    // Build the combined set
+    let mut kinds: Vec<DepKind> = existing.to_vec();
+    if !kinds.contains(&incoming) {
+        kinds.push(incoming);
+    }
+    kinds.sort();
+    kinds
 }
 
 // ============================================================================
@@ -1854,5 +2002,237 @@ mod tests {
                 .iter()
                 .any(|d| d.rule == "format.crate.lib" && d.severity == Severity::Warning)
         );
+    }
+
+    // -- Cross-pack merging tests --
+
+    /// Helper to build a CrateSpec quickly in tests.
+    fn crate_spec(version: &str, features: &[&str], dep_kind: DepKind) -> CrateSpec {
+        CrateSpec {
+            version: version.to_string(),
+            features: features.iter().map(|s| s.to_string()).collect(),
+            dep_kind,
+            optional: false,
+        }
+    }
+
+    #[test]
+    // [verify manifest.merge.version]
+    fn merge_version_newest_wins() {
+        let pack_a = BTreeMap::from([(
+            "serde".to_string(),
+            crate_spec("1.0.100", &["derive"], DepKind::Normal),
+        )]);
+        let pack_b = BTreeMap::from([(
+            "serde".to_string(),
+            crate_spec("1.0.210", &["derive"], DepKind::Normal),
+        )]);
+
+        let merged = merge_crate_specs(&[pack_a, pack_b]);
+        assert_eq!(merged["serde"].version, "1.0.210");
+    }
+
+    #[test]
+    // [verify manifest.merge.version]
+    fn merge_version_across_major() {
+        let pack_a = BTreeMap::from([(
+            "clap".to_string(),
+            crate_spec("3.4.0", &[], DepKind::Normal),
+        )]);
+        let pack_b = BTreeMap::from([(
+            "clap".to_string(),
+            crate_spec("4.5.0", &[], DepKind::Normal),
+        )]);
+
+        let merged = merge_crate_specs(&[pack_a, pack_b]);
+        assert_eq!(merged["clap"].version, "4.5.0");
+    }
+
+    #[test]
+    // [verify manifest.merge.version]
+    fn merge_version_same_version_no_conflict() {
+        let pack_a = BTreeMap::from([(
+            "anyhow".to_string(),
+            crate_spec("1.0.80", &[], DepKind::Normal),
+        )]);
+        let pack_b = BTreeMap::from([(
+            "anyhow".to_string(),
+            crate_spec("1.0.80", &[], DepKind::Normal),
+        )]);
+
+        let merged = merge_crate_specs(&[pack_a, pack_b]);
+        assert_eq!(merged["anyhow"].version, "1.0.80");
+    }
+
+    #[test]
+    // [verify manifest.merge.features]
+    fn merge_features_union() {
+        let pack_a = BTreeMap::from([(
+            "tokio".to_string(),
+            crate_spec("1", &["macros", "rt"], DepKind::Normal),
+        )]);
+        let pack_b = BTreeMap::from([(
+            "tokio".to_string(),
+            crate_spec("1", &["rt", "net", "io-util"], DepKind::Normal),
+        )]);
+
+        let merged = merge_crate_specs(&[pack_a, pack_b]);
+        let features = &merged["tokio"].features;
+        assert!(features.contains(&"macros".to_string()));
+        assert!(features.contains(&"rt".to_string()));
+        assert!(features.contains(&"net".to_string()));
+        assert!(features.contains(&"io-util".to_string()));
+        // "rt" should not be duplicated
+        assert_eq!(features.iter().filter(|f| f.as_str() == "rt").count(), 1);
+    }
+
+    #[test]
+    // [verify manifest.merge.dep-kind]
+    fn merge_dep_kind_normal_wins_over_dev() {
+        let pack_a = BTreeMap::from([("serde".to_string(), crate_spec("1", &[], DepKind::Normal))]);
+        let pack_b = BTreeMap::from([("serde".to_string(), crate_spec("1", &[], DepKind::Dev))]);
+
+        let merged = merge_crate_specs(&[pack_a, pack_b]);
+        assert_eq!(merged["serde"].dep_kinds, vec![DepKind::Normal]);
+    }
+
+    #[test]
+    // [verify manifest.merge.dep-kind]
+    fn merge_dep_kind_normal_wins_over_build() {
+        let pack_a = BTreeMap::from([("cc".to_string(), crate_spec("1", &[], DepKind::Build))]);
+        let pack_b = BTreeMap::from([("cc".to_string(), crate_spec("1", &[], DepKind::Normal))]);
+
+        let merged = merge_crate_specs(&[pack_a, pack_b]);
+        assert_eq!(merged["cc"].dep_kinds, vec![DepKind::Normal]);
+    }
+
+    #[test]
+    // [verify manifest.merge.dep-kind]
+    fn merge_dep_kind_dev_and_build_yields_both() {
+        let pack_a = BTreeMap::from([("serde".to_string(), crate_spec("1", &[], DepKind::Dev))]);
+        let pack_b = BTreeMap::from([("serde".to_string(), crate_spec("1", &[], DepKind::Build))]);
+
+        let merged = merge_crate_specs(&[pack_a, pack_b]);
+        let kinds = &merged["serde"].dep_kinds;
+        assert_eq!(kinds.len(), 2);
+        assert!(kinds.contains(&DepKind::Dev));
+        assert!(kinds.contains(&DepKind::Build));
+    }
+
+    #[test]
+    // [verify manifest.merge.version]
+    // [verify manifest.merge.features]
+    // [verify manifest.merge.dep-kind]
+    fn merge_three_packs_all_rules() {
+        let pack_a = BTreeMap::from([
+            (
+                "tokio".to_string(),
+                crate_spec("1.35.0", &["macros"], DepKind::Normal),
+            ),
+            (
+                "serde".to_string(),
+                crate_spec("1.0.100", &["derive"], DepKind::Dev),
+            ),
+        ]);
+        let pack_b = BTreeMap::from([
+            (
+                "tokio".to_string(),
+                crate_spec("1.38.0", &["rt"], DepKind::Dev),
+            ),
+            (
+                "serde".to_string(),
+                crate_spec("1.0.210", &["alloc"], DepKind::Build),
+            ),
+        ]);
+        let pack_c = BTreeMap::from([
+            (
+                "tokio".to_string(),
+                crate_spec("1.36.0", &["net", "macros"], DepKind::Normal),
+            ),
+            (
+                "anyhow".to_string(),
+                crate_spec("1.0.80", &[], DepKind::Normal),
+            ),
+        ]);
+
+        let merged = merge_crate_specs(&[pack_a, pack_b, pack_c]);
+
+        // tokio: version 1.38.0 (highest), features union, Normal wins
+        let tokio = &merged["tokio"];
+        assert_eq!(tokio.version, "1.38.0");
+        assert!(tokio.features.contains(&"macros".to_string()));
+        assert!(tokio.features.contains(&"rt".to_string()));
+        assert!(tokio.features.contains(&"net".to_string()));
+        assert_eq!(tokio.dep_kinds, vec![DepKind::Normal]);
+
+        // serde: version 1.0.210 (highest), features union, dev+build = both
+        let serde = &merged["serde"];
+        assert_eq!(serde.version, "1.0.210");
+        assert!(serde.features.contains(&"derive".to_string()));
+        assert!(serde.features.contains(&"alloc".to_string()));
+        assert_eq!(serde.dep_kinds.len(), 2);
+        assert!(serde.dep_kinds.contains(&DepKind::Dev));
+        assert!(serde.dep_kinds.contains(&DepKind::Build));
+
+        // anyhow: only in pack_c, should appear as-is
+        let anyhow = &merged["anyhow"];
+        assert_eq!(anyhow.version, "1.0.80");
+        assert_eq!(anyhow.dep_kinds, vec![DepKind::Normal]);
+    }
+
+    #[test]
+    // [verify manifest.merge.version]
+    // [verify manifest.merge.features]
+    fn merge_non_overlapping_crates() {
+        let pack_a = BTreeMap::from([(
+            "serde".to_string(),
+            crate_spec("1.0.210", &["derive"], DepKind::Normal),
+        )]);
+        let pack_b = BTreeMap::from([(
+            "clap".to_string(),
+            crate_spec("4.5.0", &["derive"], DepKind::Normal),
+        )]);
+
+        let merged = merge_crate_specs(&[pack_a, pack_b]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged["serde"].version, "1.0.210");
+        assert_eq!(merged["clap"].version, "4.5.0");
+    }
+
+    #[test]
+    fn merge_empty_input() {
+        let merged = merge_crate_specs(&[]);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_single_pack() {
+        let pack = BTreeMap::from([
+            (
+                "serde".to_string(),
+                crate_spec("1", &["derive"], DepKind::Normal),
+            ),
+            ("clap".to_string(), crate_spec("4", &[], DepKind::Normal)),
+        ]);
+
+        let merged = merge_crate_specs(&[pack]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged["serde"].version, "1");
+        assert_eq!(merged["serde"].features, vec!["derive"]);
+        assert_eq!(merged["serde"].dep_kinds, vec![DepKind::Normal]);
+    }
+
+    // -- Version comparison unit tests --
+
+    #[test]
+    fn compare_versions_basic() {
+        use std::cmp::Ordering;
+        assert_eq!(compare_versions("1.0.0", "1.0.0"), Ordering::Equal);
+        assert_eq!(compare_versions("1.0.1", "1.0.0"), Ordering::Greater);
+        assert_eq!(compare_versions("1.0.0", "1.0.1"), Ordering::Less);
+        assert_eq!(compare_versions("2.0.0", "1.9.9"), Ordering::Greater);
+        assert_eq!(compare_versions("1", "1.0"), Ordering::Equal);
+        assert_eq!(compare_versions("1", "2"), Ordering::Less);
+        assert_eq!(compare_versions("1.0.210", "1.0.100"), Ordering::Greater);
     }
 }

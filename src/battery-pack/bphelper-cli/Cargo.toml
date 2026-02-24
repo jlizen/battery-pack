@@ -27,3 +27,4 @@ open = "5"
 dialoguer = "0.11"
 syn = { version = "2", features = ["full"] }
 toml_edit = "0.22"
+semver = "1"
