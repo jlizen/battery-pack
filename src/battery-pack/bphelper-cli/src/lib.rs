@@ -53,10 +53,15 @@ pub enum BpCommands {
         path: Option<String>,
     },
 
-    /// Add a battery pack and sync its dependencies
+    /// Add a battery pack and sync its dependencies.
+    ///
+    /// Without arguments, opens an interactive TUI for managing all battery packs.
+    /// With a battery pack name, adds that specific pack (with an interactive picker
+    /// for choosing crates if the pack has sets or many dependencies).
     Add {
-        /// Name of the battery pack (e.g., "cli" resolves to "cli-battery-pack")
-        battery_pack: String,
+        /// Name of the battery pack (e.g., "cli" resolves to "cli-battery-pack").
+        /// Omit to open the interactive manager.
+        battery_pack: Option<String>,
 
         /// Named sets to enable (in addition to the default set)
         #[arg(long, short = 'w')]
@@ -126,7 +131,15 @@ pub fn main() -> Result<()> {
                 with,
                 all,
                 path,
-            } => add_battery_pack(&battery_pack, &with, all, path.as_deref()),
+            } => match battery_pack {
+                Some(name) => add_battery_pack(&name, &with, all, path.as_deref()),
+                None if std::io::stdout().is_terminal() => tui::run_add(),
+                None => {
+                    bail!(
+                        "No battery pack specified. Use `cargo bp add <name>` or run interactively in a terminal."
+                    )
+                }
+            },
             BpCommands::Sync => sync_battery_packs(),
             BpCommands::Enable {
                 set_name,
@@ -359,14 +372,51 @@ fn new_from_battery_pack(
 fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&str>) -> Result<()> {
     let crate_name = resolve_crate_name(name);
 
-    // For registry deps, look up the version first (we need it for the build-dep entry)
-    let bp_version = if path.is_some() {
-        None
+    // Step 1: Read the battery pack spec WITHOUT modifying any manifests.
+    // For registry deps: download from crates.io and parse directly.
+    // For path deps: read the Cargo.toml from the local path.
+    let (bp_version, bp_spec) = if let Some(local_path) = path {
+        let manifest_path = Path::new(local_path).join("Cargo.toml");
+        let manifest_content = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+        let spec = bphelper_manifest::parse_battery_pack(&manifest_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse battery pack '{}': {}", crate_name, e))?;
+        (None, spec)
     } else {
-        Some(lookup_crate(&crate_name)?.version)
+        let (version, spec) = fetch_bp_spec_from_registry(&crate_name)?;
+        (Some(version), spec)
     };
 
-    // Step 1: Add battery pack to [build-dependencies] so cargo can resolve it
+    // Step 2: Determine which crates to install — interactive picker, explicit flags, or defaults.
+    // No manifest changes have been made yet, so cancellation is free.
+    let use_picker = !all
+        && with_sets.is_empty()
+        && std::io::stdout().is_terminal()
+        && bp_spec.has_meaningful_choices();
+
+    let (active_sets, crates_to_sync) = if all {
+        (vec!["all".to_string()], bp_spec.resolve_all())
+    } else if use_picker {
+        match pick_crates_interactive(&bp_spec)? {
+            Some(result) => (result.active_sets, result.crates),
+            None => {
+                println!("Cancelled.");
+                return Ok(());
+            }
+        }
+    } else {
+        let mut sets = vec!["default".to_string()];
+        sets.extend(with_sets.iter().cloned());
+        let crates = bp_spec.resolve_crates(&sets);
+        (sets, crates)
+    };
+
+    if crates_to_sync.is_empty() {
+        println!("No crates selected.");
+        return Ok(());
+    }
+
+    // Step 3: Now write everything — build-dep, workspace deps, crate deps, metadata.
     let user_manifest_path = find_user_manifest()?;
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
@@ -376,6 +426,7 @@ fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&s
 
     let workspace_manifest = find_workspace_manifest(&user_manifest_path)?;
 
+    // Add battery pack to [build-dependencies]
     let build_deps =
         user_doc["build-dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
     if let Some(table) = build_deps.as_table_mut() {
@@ -398,7 +449,7 @@ fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&s
         }
     }
 
-    // Also add to workspace deps if applicable
+    // Add crate dependencies + workspace deps (including the battery pack itself)
     if let Some(ref ws_path) = workspace_manifest {
         let ws_content =
             std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
@@ -409,6 +460,7 @@ fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&s
         let ws_deps = ws_doc["workspace"]["dependencies"]
             .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
         if let Some(ws_table) = ws_deps.as_table_mut() {
+            // Add the battery pack itself to workspace deps
             if let Some(local_path) = path {
                 let mut dep = toml_edit::InlineTable::new();
                 dep.insert("path", toml_edit::Value::from(local_path));
@@ -419,50 +471,7 @@ fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&s
             } else {
                 ws_table.insert(&crate_name, toml_edit::value(bp_version.as_ref().unwrap()));
             }
-        }
-        std::fs::write(ws_path, ws_doc.to_string())
-            .context("Failed to write workspace Cargo.toml")?;
-    }
-
-    // Write the Cargo.toml with the build-dep so cargo metadata can resolve it
-    std::fs::write(&user_manifest_path, user_doc.to_string())
-        .context("Failed to write Cargo.toml")?;
-
-    // Step 2: Use cargo metadata to read the battery pack spec
-    let bp_spec = fetch_battery_pack_spec(&crate_name)?;
-
-    // Determine which crates to sync
-    let active_sets = if all {
-        vec!["default".to_string()]
-    } else {
-        let mut sets = vec!["default".to_string()];
-        sets.extend(with_sets.iter().cloned());
-        sets
-    };
-
-    let crates_to_sync = if all {
-        bp_spec.resolve_all()
-    } else {
-        bp_spec.resolve_crates(&active_sets)
-    };
-
-    // Step 3: Re-read and update Cargo.toml with the resolved crate dependencies
-    let user_manifest_content =
-        std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
-    let mut user_doc: toml_edit::DocumentMut = user_manifest_content
-        .parse()
-        .context("Failed to parse Cargo.toml")?;
-
-    if let Some(ref ws_path) = workspace_manifest {
-        let ws_content =
-            std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
-        let mut ws_doc: toml_edit::DocumentMut = ws_content
-            .parse()
-            .context("Failed to parse workspace Cargo.toml")?;
-
-        let ws_deps = ws_doc["workspace"]["dependencies"]
-            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        if let Some(ws_table) = ws_deps.as_table_mut() {
+            // Add the resolved crate dependencies
             for (dep_name, dep_spec) in &crates_to_sync {
                 add_dep_to_table(ws_table, dep_name, dep_spec);
             }
@@ -495,12 +504,8 @@ fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&s
     // Record active sets in [package.metadata.battery-pack.<crate-name>]
     let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&crate_name];
     let mut sets_array = toml_edit::Array::new();
-    if all {
-        sets_array.push("all");
-    } else {
-        for set in &active_sets {
-            sets_array.push(set.as_str());
-        }
+    for set in &active_sets {
+        sets_array.push(set.as_str());
     }
     *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
     bp_meta["sets"] = toml_edit::value(sets_array);
@@ -533,21 +538,7 @@ fn sync_battery_packs() -> Result<()> {
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
 
-    // Find installed battery packs from [build-dependencies]
-    let raw: toml::Value =
-        toml::from_str(&user_manifest_content).context("Failed to parse Cargo.toml")?;
-
-    let build_deps = raw
-        .get("build-dependencies")
-        .and_then(|bd| bd.as_table())
-        .cloned()
-        .unwrap_or_default();
-
-    let bp_names: Vec<String> = build_deps
-        .keys()
-        .filter(|k| k.ends_with("-battery-pack") || *k == "battery-pack")
-        .cloned()
-        .collect();
+    let bp_names = find_installed_bp_names(&user_manifest_content)?;
 
     if bp_names.is_empty() {
         println!("No battery packs installed.");
@@ -647,25 +638,12 @@ fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
 
-    let raw: toml::Value =
-        toml::from_str(&user_manifest_content).context("Failed to parse Cargo.toml")?;
-
-    let build_deps = raw
-        .get("build-dependencies")
-        .and_then(|bd| bd.as_table())
-        .cloned()
-        .unwrap_or_default();
-
     // Find which battery pack has this set
     let bp_name = if let Some(name) = battery_pack {
         resolve_crate_name(name)
     } else {
         // Search all installed battery packs
-        let bp_names: Vec<String> = build_deps
-            .keys()
-            .filter(|k| k.ends_with("-battery-pack") || *k == "battery-pack")
-            .cloned()
-            .collect();
+        let bp_names = find_installed_bp_names(&user_manifest_content)?;
 
         let mut found = None;
         for name in &bp_names {
@@ -771,6 +749,112 @@ fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
 }
 
 // ============================================================================
+// Interactive crate picker
+// ============================================================================
+
+/// Represents the result of an interactive crate selection.
+struct PickerResult {
+    /// The resolved crates to install (name -> dep spec with merged features).
+    crates: BTreeMap<String, bphelper_manifest::DepSpec>,
+    /// Which set names are fully selected (for metadata recording).
+    active_sets: Vec<String>,
+}
+
+/// Show an interactive multi-select picker for choosing which crates to install.
+///
+/// Returns `None` if the user cancels. Returns `Some(PickerResult)` with the
+/// selected crates and which sets are fully active.
+fn pick_crates_interactive(
+    bp_spec: &bphelper_manifest::BatteryPackSpec,
+) -> Result<Option<PickerResult>> {
+    use console::style;
+    use dialoguer::MultiSelect;
+
+    let grouped = bp_spec.all_crates_with_grouping();
+    if grouped.is_empty() {
+        bail!("Battery pack has no crates to add");
+    }
+
+    // Build display items and track which group each belongs to
+    let mut labels = Vec::new();
+    let mut defaults = Vec::new();
+
+    for (group, crate_name, dep, is_default) in &grouped {
+        let version_info = dep.version_info();
+
+        let group_label = if group == "default" {
+            String::new()
+        } else {
+            format!(" [{}]", group)
+        };
+
+        labels.push(format!(
+            "{} {}{}",
+            crate_name,
+            style(&version_info).dim(),
+            style(&group_label).cyan()
+        ));
+        defaults.push(*is_default);
+    }
+
+    // Show the picker
+    println!();
+    println!(
+        "  {} v{}",
+        style(&bp_spec.name).green().bold(),
+        style(&bp_spec.version).dim()
+    );
+    println!();
+
+    let selections = MultiSelect::new()
+        .with_prompt("Select crates to add")
+        .items(&labels)
+        .defaults(&defaults)
+        .interact_opt()
+        .context("Failed to show crate picker")?;
+
+    let Some(selected_indices) = selections else {
+        return Ok(None); // User cancelled
+    };
+
+    // Build the result: resolve selected crates with proper feature merging
+    let mut crates = BTreeMap::new();
+
+    for idx in &selected_indices {
+        let (_group, crate_name, dep, _) = &grouped[*idx];
+        // Start with base dep spec
+        let mut merged = (*dep).clone();
+
+        // If this crate has feature augmentations from sets, apply them
+        for (_set_name, set_spec) in &bp_spec.sets {
+            if let Some(set_crate) = set_spec.crates.get(crate_name) {
+                for feat in &set_crate.features {
+                    if !merged.features.contains(feat) {
+                        merged.features.push(feat.clone());
+                    }
+                }
+            }
+        }
+
+        crates.insert(crate_name.clone(), merged);
+    }
+
+    // Determine which sets are "fully selected" for metadata
+    let mut active_sets = vec!["default".to_string()];
+    for (set_name, set_spec) in &bp_spec.sets {
+        let all_set_crates_selected = set_spec.crates.keys().all(|c| crates.contains_key(c));
+        if all_set_crates_selected {
+            active_sets.push(set_name.clone());
+        }
+    }
+
+    Ok(Some(PickerResult {
+        crates,
+        active_sets,
+    }))
+}
+
+// ============================================================================
 // Cargo.toml manipulation helpers
 // ============================================================================
 
@@ -782,6 +866,26 @@ fn find_user_manifest() -> Result<std::path::PathBuf> {
     } else {
         bail!("No Cargo.toml found in the current directory");
     }
+}
+
+/// Extract battery pack crate names from a parsed Cargo.toml.
+///
+/// Filters `[build-dependencies]` for entries ending in `-battery-pack` or equal to `"battery-pack"`.
+fn find_installed_bp_names(manifest_content: &str) -> Result<Vec<String>> {
+    let raw: toml::Value =
+        toml::from_str(manifest_content).context("Failed to parse Cargo.toml")?;
+
+    let build_deps = raw
+        .get("build-dependencies")
+        .and_then(|bd| bd.as_table())
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(build_deps
+        .keys()
+        .filter(|k| k.ends_with("-battery-pack") || *k == "battery-pack")
+        .cloned()
+        .collect())
 }
 
 /// Find the workspace root Cargo.toml, if any.
@@ -962,6 +1066,30 @@ fn fetch_battery_pack_spec(bp_name: &str) -> Result<bphelper_manifest::BatteryPa
 
     bphelper_manifest::parse_battery_pack(&manifest_content)
         .map_err(|e| anyhow::anyhow!("Failed to parse battery pack '{}': {}", bp_name, e))
+}
+
+/// Download a battery pack from crates.io and parse its spec.
+///
+/// Unlike `fetch_battery_pack_spec` (which uses cargo metadata and requires the
+/// crate to already be a build-dependency), this downloads from the registry
+/// directly. Returns `(version, spec)`.
+pub(crate) fn fetch_bp_spec_from_registry(
+    crate_name: &str,
+) -> Result<(String, bphelper_manifest::BatteryPackSpec)> {
+    let crate_info = lookup_crate(crate_name)?;
+    let temp_dir = download_and_extract_crate(crate_name, &crate_info.version)?;
+    let crate_dir = temp_dir
+        .path()
+        .join(format!("{}-{}", crate_name, crate_info.version));
+
+    let manifest_path = crate_dir.join("Cargo.toml");
+    let manifest_content = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+
+    let spec = bphelper_manifest::parse_battery_pack(&manifest_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse battery pack '{}': {}", crate_name, e))?;
+
+    Ok((crate_info.version, spec))
 }
 
 // ============================================================================
@@ -1265,6 +1393,43 @@ fn prompt_for_template(templates: &BTreeMap<String, TemplateConfig>) -> Result<S
         .nth(selection)
         .ok_or_else(|| anyhow::anyhow!("Invalid template selection"))?;
     Ok(config.path.clone())
+}
+
+/// Info about an installed battery pack — its spec plus which crates are currently enabled.
+pub struct InstalledPack {
+    pub name: String,
+    pub short_name: String,
+    pub version: String,
+    pub spec: bphelper_manifest::BatteryPackSpec,
+    pub active_sets: Vec<String>,
+}
+
+/// Load all installed battery packs with their specs and active sets.
+///
+/// Reads `[build-dependencies]` from the user's Cargo.toml, fetches each
+/// battery pack's spec via cargo metadata, and reads active sets from
+/// `[package.metadata.battery-pack]`.
+pub fn load_installed_packs() -> Result<Vec<InstalledPack>> {
+    let user_manifest_path = find_user_manifest()?;
+    let user_manifest_content =
+        std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
+
+    let bp_names = find_installed_bp_names(&user_manifest_content)?;
+
+    let mut packs = Vec::new();
+    for bp_name in bp_names {
+        let spec = fetch_battery_pack_spec(&bp_name)?;
+        let active_sets = read_active_sets(&user_manifest_content, &bp_name);
+        packs.push(InstalledPack {
+            short_name: short_name(&bp_name).to_string(),
+            version: spec.version.clone(),
+            spec,
+            name: bp_name,
+            active_sets,
+        });
+    }
+
+    Ok(packs)
 }
 
 /// Fetch battery pack list from crates.io

@@ -28,6 +28,17 @@ pub struct DepSpec {
     pub features: Vec<String>,
 }
 
+impl DepSpec {
+    /// Format version and features for display, e.g. `"(1.0)"` or `"(1.0, features: serde, tokio)"`.
+    pub fn version_info(&self) -> String {
+        if self.features.is_empty() {
+            format!("({})", self.version)
+        } else {
+            format!("({}, features: {})", self.version, self.features.join(", "))
+        }
+    }
+}
+
 /// A named set of crates with optional feature augmentation.
 #[derive(Debug, Clone)]
 pub struct SetSpec {
@@ -90,6 +101,53 @@ impl BatteryPackSpec {
         }
 
         result
+    }
+
+    /// Return all crates grouped by default/set membership, for interactive display.
+    ///
+    /// Each entry is `(group_name, crate_name, dep_spec, is_default)`.
+    /// Groups: `"default"` for default crates, then each set name.
+    /// Crates in dev-dependencies but not in any group appear as `"other"`.
+    /// A crate appears only once, in the first group that claims it.
+    pub fn all_crates_with_grouping(&self) -> Vec<(String, String, &DepSpec, bool)> {
+        let mut result = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+
+        // Default crates first
+        for crate_name in &self.default_crates {
+            if let Some(dep) = self.dev_dependencies.get(crate_name) {
+                result.push(("default".to_string(), crate_name.clone(), dep, true));
+                seen.insert(crate_name.clone());
+            }
+        }
+
+        // Then each set
+        for (set_name, set_spec) in &self.sets {
+            for crate_name in set_spec.crates.keys() {
+                if seen.contains(crate_name) {
+                    continue;
+                }
+                if let Some(dep) = self.dev_dependencies.get(crate_name) {
+                    result.push((set_name.clone(), crate_name.clone(), dep, false));
+                    seen.insert(crate_name.clone());
+                }
+            }
+        }
+
+        // Any remaining dev-deps not claimed by default or sets
+        for (crate_name, dep) in &self.dev_dependencies {
+            if !seen.contains(crate_name) {
+                result.push(("other".to_string(), crate_name.clone(), dep, false));
+            }
+        }
+
+        result
+    }
+
+    /// Returns true if this battery pack has meaningful choices for the user
+    /// (more than 3 dev-deps or has named sets).
+    pub fn has_meaningful_choices(&self) -> bool {
+        !self.sets.is_empty() || self.dev_dependencies.len() > 3
     }
 
     /// Resolve all dev-dependencies (for --all flag).
