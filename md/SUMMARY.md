@@ -19,3 +19,7 @@
 - [TUI Behavior](./spec/tui.md)
 - [Manifest Manipulation](./spec/manifest.md)
 - [Documentation Generation](./spec/docgen.md)
+
+# Agent guide
+
+- [Ratatui testing guide](./ratatui-testing-guide.md)
