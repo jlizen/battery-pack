@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "basic-battery-pack",
+    "fancy-battery-pack",
+    "broken-battery-pack",
+]
+resolver = "2"

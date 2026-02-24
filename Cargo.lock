@@ -202,6 +202,8 @@ version = "0.4.1"
 dependencies = [
  "expect-test",
  "serde",
+ "tempfile",
+ "thiserror 2.0.18",
  "toml",
 ]
 
@@ -735,15 +737,6 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "error-battery-pack"
-version = "0.4.0"
-dependencies = [
- "anyhow",
- "battery-pack",
- "thiserror 2.0.18",
 ]
 
 [[package]]

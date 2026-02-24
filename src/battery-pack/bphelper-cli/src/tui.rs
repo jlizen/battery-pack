@@ -439,7 +439,8 @@ fn build_installed_state(packs: Vec<InstalledPack>) -> InstalledState {
             let resolved = if pack.active_sets.iter().any(|s| s == "all") {
                 pack.spec.resolve_all()
             } else {
-                pack.spec.resolve_crates(&pack.active_sets)
+                let str_sets: Vec<&str> = pack.active_sets.iter().map(|s| s.as_str()).collect();
+                pack.spec.resolve_crates(&str_sets)
             };
 
             let entries = grouped

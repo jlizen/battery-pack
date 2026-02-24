@@ -112,6 +112,13 @@ pub enum BpCommands {
         #[arg(long)]
         non_interactive: bool,
     },
+
+    /// Validate that the current battery pack is well-formed
+    Validate {
+        /// Path to the battery pack crate (defaults to current directory)
+        #[arg(long)]
+        path: Option<String>,
+    },
 }
 
 /// Main entry point for the CLI.
@@ -166,6 +173,7 @@ pub fn main() -> Result<()> {
                     print_battery_pack_detail(&battery_pack, path.as_deref())
                 }
             }
+            BpCommands::Validate { path } => validate_battery_pack_cmd(path.as_deref()),
         },
     }
 }
@@ -407,7 +415,8 @@ fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&s
     } else {
         let mut sets = vec!["default".to_string()];
         sets.extend(with_sets.iter().cloned());
-        let crates = bp_spec.resolve_crates(&sets);
+        let str_sets: Vec<&str> = sets.iter().map(|s| s.as_str()).collect();
+        let crates = bp_spec.resolve_crates(&str_sets);
         (sets, crates)
     };
 
@@ -562,7 +571,8 @@ fn sync_battery_packs() -> Result<()> {
         let expected = if active_sets.iter().any(|s| s == "all") {
             bp_spec.resolve_all()
         } else {
-            bp_spec.resolve_crates(&active_sets)
+            let str_sets: Vec<&str> = active_sets.iter().map(|s| s.as_str()).collect();
+            bp_spec.resolve_crates(&str_sets)
         };
 
         // Sync each crate
@@ -648,7 +658,7 @@ fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
         let mut found = None;
         for name in &bp_names {
             let spec = fetch_battery_pack_spec(name)?;
-            if spec.sets.contains_key(set_name) {
+            if spec.features.contains_key(set_name) {
                 found = Some(name.clone());
                 break;
             }
@@ -660,8 +670,8 @@ fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
 
     let bp_spec = fetch_battery_pack_spec(&bp_name)?;
 
-    if !bp_spec.sets.contains_key(set_name) {
-        let available: Vec<_> = bp_spec.sets.keys().collect();
+    if !bp_spec.features.contains_key(set_name) {
+        let available: Vec<_> = bp_spec.features.keys().collect();
         bail!(
             "Battery pack '{}' has no set '{}'. Available: {:?}",
             bp_name,
@@ -679,7 +689,8 @@ fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
     active_sets.push(set_name.to_string());
 
     // Resolve what this changes
-    let crates_to_sync = bp_spec.resolve_crates(&active_sets);
+    let str_sets: Vec<&str> = active_sets.iter().map(|s| s.as_str()).collect();
+    let crates_to_sync = bp_spec.resolve_crates(&str_sets);
 
     // Update user manifest
     let mut user_doc: toml_edit::DocumentMut = user_manifest_content
@@ -755,7 +766,7 @@ fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
 /// Represents the result of an interactive crate selection.
 struct PickerResult {
     /// The resolved crates to install (name -> dep spec with merged features).
-    crates: BTreeMap<String, bphelper_manifest::DepSpec>,
+    crates: BTreeMap<String, bphelper_manifest::CrateSpec>,
     /// Which set names are fully selected (for metadata recording).
     active_sets: Vec<String>,
 }
@@ -780,7 +791,11 @@ fn pick_crates_interactive(
     let mut defaults = Vec::new();
 
     for (group, crate_name, dep, is_default) in &grouped {
-        let version_info = dep.version_info();
+        let version_info = if dep.features.is_empty() {
+            format!("({})", dep.version)
+        } else {
+            format!("({}, features: {})", dep.version, dep.features.join(", "))
+        };
 
         let group_label = if group == "default" {
             String::new()
@@ -823,28 +838,20 @@ fn pick_crates_interactive(
     for idx in &selected_indices {
         let (_group, crate_name, dep, _) = &grouped[*idx];
         // Start with base dep spec
-        let mut merged = (*dep).clone();
-
-        // If this crate has feature augmentations from sets, apply them
-        for (_set_name, set_spec) in &bp_spec.sets {
-            if let Some(set_crate) = set_spec.crates.get(crate_name) {
-                for feat in &set_crate.features {
-                    if !merged.features.contains(feat) {
-                        merged.features.push(feat.clone());
-                    }
-                }
-            }
-        }
+        let merged = (*dep).clone();
 
         crates.insert(crate_name.clone(), merged);
     }
 
-    // Determine which sets are "fully selected" for metadata
+    // Determine which features are "fully selected" for metadata
     let mut active_sets = vec!["default".to_string()];
-    for (set_name, set_spec) in &bp_spec.sets {
-        let all_set_crates_selected = set_spec.crates.keys().all(|c| crates.contains_key(c));
-        if all_set_crates_selected {
-            active_sets.push(set_name.clone());
+    for (feature_name, feature_crates) in &bp_spec.features {
+        if feature_name == "default" {
+            continue;
+        }
+        let all_selected = feature_crates.iter().all(|c| crates.contains_key(c));
+        if all_selected {
+            active_sets.push(feature_name.clone());
         }
     }
 
@@ -922,7 +929,7 @@ fn find_workspace_manifest(crate_manifest: &Path) -> Result<Option<std::path::Pa
 }
 
 /// Add a dependency to a toml_edit table (non-workspace mode).
-fn add_dep_to_table(table: &mut toml_edit::Table, name: &str, spec: &bphelper_manifest::DepSpec) {
+fn add_dep_to_table(table: &mut toml_edit::Table, name: &str, spec: &bphelper_manifest::CrateSpec) {
     if spec.features.is_empty() {
         table.insert(name, toml_edit::value(&spec.version));
     } else {
@@ -945,7 +952,7 @@ fn add_dep_to_table(table: &mut toml_edit::Table, name: &str, spec: &bphelper_ma
 fn sync_dep_in_table(
     table: &mut toml_edit::Table,
     name: &str,
-    spec: &bphelper_manifest::DepSpec,
+    spec: &bphelper_manifest::CrateSpec,
 ) -> bool {
     let Some(existing) = table.get_mut(name) else {
         // Not present — add it
@@ -1885,4 +1892,57 @@ fn find_template_path(tree: &[String], template_path: &str) -> Option<String> {
     tree.iter()
         .find(|path| path.ends_with(template_path))
         .cloned()
+}
+
+// ============================================================================
+// Validate command
+// ============================================================================
+
+fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
+    let crate_root = match path {
+        Some(p) => std::path::PathBuf::from(p),
+        None => std::env::current_dir().context("failed to get current directory")?,
+    };
+
+    let cargo_toml = crate_root.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml)
+        .with_context(|| format!("failed to read {}", cargo_toml.display()))?;
+
+    let spec = bphelper_manifest::parse_battery_pack(&content)
+        .with_context(|| format!("failed to parse {}", cargo_toml.display()))?;
+
+    let mut report = spec.validate_spec();
+    report.merge(bphelper_manifest::validate_on_disk(&spec, &crate_root));
+
+    if report.is_clean() {
+        println!("{} is valid", spec.name);
+        return Ok(());
+    }
+
+    let mut errors = 0;
+    let mut warnings = 0;
+    for diag in &report.diagnostics {
+        match diag.severity {
+            bphelper_manifest::Severity::Error => {
+                eprintln!("error[{}]: {}", diag.rule, diag.message);
+                errors += 1;
+            }
+            bphelper_manifest::Severity::Warning => {
+                eprintln!("warning[{}]: {}", diag.rule, diag.message);
+                warnings += 1;
+            }
+        }
+    }
+
+    if errors > 0 {
+        bail!(
+            "validation failed: {} error(s), {} warning(s)",
+            errors,
+            warnings
+        );
+    }
+
+    // Warnings only — still succeeds
+    println!("{} is valid ({} warning(s))", spec.name, warnings);
+    Ok(())
 }

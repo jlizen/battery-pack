@@ -26,7 +26,7 @@
 //! }
 //! ```
 
-pub use bphelper_manifest::{BatteryPackSpec, DepSpec, assert_no_regular_deps};
+pub use bphelper_manifest::{BatteryPackSpec, CrateSpec, DepKind};
 
 /// Validate that the calling crate's dependencies match a battery pack's specs.
 ///
@@ -37,7 +37,7 @@ pub use bphelper_manifest::{BatteryPackSpec, DepSpec, assert_no_regular_deps};
 ///
 /// Emits `cargo:warning` messages for any drift. Never fails the build.
 pub fn validate(self_manifest: &str) {
-    let bp_spec = match bphelper_manifest::parse_battery_pack(self_manifest) {
+    let _bp_spec = match bphelper_manifest::parse_battery_pack(self_manifest) {
         Ok(spec) => spec,
         Err(e) => {
             println!("cargo:warning=battery-pack: failed to parse battery pack manifest: {e}");
@@ -53,24 +53,7 @@ pub fn validate(self_manifest: &str) {
         }
     };
 
-    let user_manifest = match std::fs::read_to_string(&user_toml_path) {
-        Ok(content) => content,
-        Err(e) => {
-            println!("cargo:warning=battery-pack: failed to read {user_toml_path}: {e}");
-            return;
-        }
-    };
-
-    let user = match bphelper_manifest::parse_user_manifest(&user_manifest) {
-        Ok(u) => u,
-        Err(e) => {
-            println!("cargo:warning=battery-pack: failed to parse user manifest: {e}");
-            return;
-        }
-    };
-
-    bphelper_manifest::check_drift(&bp_spec, &user);
-
-    // Rerun validation when user's Cargo.toml changes
+    // TODO: implement drift detection against user's Cargo.toml
+    // For now, just ensure we rerun when the user's manifest changes.
     println!("cargo:rerun-if-changed={user_toml_path}");
 }

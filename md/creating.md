@@ -1,0 +1,204 @@
+# Creating a Battery Pack
+
+A battery pack is a normal Rust crate published on crates.io.
+It has no real code — just a Cargo.toml that curates dependencies,
+plus documentation, examples, and optionally templates.
+
+## Scaffolding
+
+The fastest way to start is:
+
+```bash
+cargo bp new battery-pack --name my-battery-pack
+```
+
+This creates a new battery pack project from the built-in template,
+complete with the right structure, a starter README, and license files.
+
+## Anatomy of a battery pack
+
+Here's what a battery pack looks like:
+
+```
+my-battery-pack/
+├── Cargo.toml
+├── README.md
+├── docs.handlebars.md
+├── src/
+│   └── lib.rs
+├── examples/
+│   ├── basic.rs
+│   └── advanced.rs
+└── templates/
+    └── default/
+        ├── cargo-generate.toml
+        ├── Cargo.toml.liquid
+        └── src/
+            └── main.rs
+```
+
+The important parts:
+
+- **Cargo.toml** — defines the curated crates as dependencies
+- **README.md** — your prose documentation
+- **docs.handlebars.md** — template for auto-generated docs on docs.rs
+- **src/lib.rs** — just a doc include (no real code)
+- **examples/** — runnable examples showing the crates in action
+- **templates/** — project templates for `cargo bp new`
+
+## Defining crates
+
+Your curated crates are just regular Cargo dependencies. The dependency
+section they live in determines the default dependency kind for users:
+
+```toml
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+
+[dev-dependencies]
+expect-test = "1.5"
+
+[build-dependencies]
+cc = "1"
+```
+
+When a user installs your battery pack:
+- `anyhow` and `thiserror` default to regular dependencies
+- `expect-test` defaults to a dev-dependency
+- `cc` defaults to a build-dependency
+
+Users can override these in the TUI.
+
+## Features for grouping
+
+Use Cargo's `[features]` to organize crates into groups:
+
+```toml
+[dev-dependencies]
+clap = { version = "4", features = ["derive"] }
+dialoguer = "0.11"
+indicatif = { version = "0.17", optional = true }
+console = { version = "0.15", optional = true }
+
+[features]
+default = ["clap", "dialoguer"]
+indicators = ["indicatif", "console"]
+fancy = ["clap", "indicatif", "console"]
+```
+
+### The default feature
+
+The `default` feature determines which crates a user gets with a plain
+`cargo bp add`. Crates not in `default` are available but not installed
+unless the user explicitly enables them (e.g., `cargo bp add cli -F indicators`).
+
+If you don't define a `default` feature, all non-optional crates
+are included by default.
+
+### Optional crates
+
+Mark crates as `optional = true` if they shouldn't be part of the default
+installation. These crates are available through named features or
+individual selection in the TUI.
+
+### Feature augmentation
+
+A feature can add Cargo features to a crate, not just toggle it on:
+
+```toml
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[features]
+default = ["tokio"]
+tokio-full = ["tokio"]  # same crate, but...
+
+# In [package.metadata.battery-pack.feature-augment]
+# tokio-full adds features = ["full"] to tokio
+```
+
+Enabling `tokio-full` keeps `tokio` but adds the `full` feature on top
+of `macros` and `rt`. Feature merging is always additive.
+
+## Hidden dependencies
+
+If your battery pack has dependencies that are internal tooling — not
+something users would want to install — mark them as hidden:
+
+```toml
+[package.metadata.battery-pack]
+hidden = ["handlebars", "cargo-metadata"]
+```
+
+Hidden crates don't appear in the TUI or in `cargo bp show` output.
+
+You can use globs:
+
+```toml
+[package.metadata.battery-pack]
+hidden = ["serde*"]
+```
+
+Or hide everything (useful if your battery pack is purely templates and examples):
+
+```toml
+[package.metadata.battery-pack]
+hidden = ["*"]
+```
+
+## The lib.rs
+
+A battery pack's `lib.rs` is minimal — it just includes auto-generated documentation:
+
+```rust
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/docs.md"))]
+```
+
+This makes the battery pack's documentation visible on docs.rs,
+including an auto-generated table of all curated crates.
+See [Documentation and Examples](./docs-and-examples.md) for details
+on how the doc generation works.
+
+## Templates
+
+Templates let users bootstrap new projects with `cargo bp new`.
+They use [cargo-generate](https://github.com/cargo-generate/cargo-generate)
+under the hood.
+
+A template lives in a subdirectory under `templates/`:
+
+```
+templates/
+└── default/
+    ├── cargo-generate.toml
+    ├── Cargo.toml.liquid
+    └── src/
+        └── main.rs
+```
+
+The `cargo-generate.toml` configures template variables:
+
+```toml
+[template]
+cargo_generate_version = ">=0.22.0"
+
+[placeholders.description]
+type = "string"
+prompt = "What does this project do?"
+default = "A new project"
+```
+
+Register templates in your Cargo.toml metadata:
+
+```toml
+[package.metadata.battery.templates]
+default = { path = "templates/default", description = "A basic starting point" }
+subcmds = { path = "templates/subcmds", description = "Multi-command CLI" }
+```
+
+If you have multiple templates, users can choose:
+
+```bash
+cargo bp new my-pack --template subcmds
+```

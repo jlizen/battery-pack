@@ -1,0 +1,15 @@
+[package]
+name = "broken-battery-pack"
+version = "0.1.0"
+edition = "2021"
+description = "A deliberately broken battery pack for testing validation"
+# Missing keywords = ["battery-pack"] — violates format.crate.keyword
+
+[dependencies]
+clap = "4"
+
+[features]
+default = ["clap", "nonexistent"]  # "nonexistent" violates format.features.grouping
+
+[package.metadata.battery.templates]
+missing = { path = "templates/missing", description = "This template dir does not exist" }
