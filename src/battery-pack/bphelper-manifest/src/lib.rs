@@ -1605,6 +1605,7 @@ mod tests {
             [package]
             name = "test-battery-pack"
             version = "0.1.0"
+            repository = "https://github.com/example/test"
             keywords = ["battery-pack"]
         "#,
         )
@@ -1638,6 +1639,7 @@ mod tests {
             [package]
             name = "test-battery-pack"
             version = "0.1.0"
+            repository = "https://github.com/example/test"
             keywords = ["battery-pack", "helpers"]
         "#,
         )
@@ -1688,6 +1690,7 @@ mod tests {
             [package]
             name = "test-battery-pack"
             version = "0.1.0"
+            repository = "https://github.com/example/test"
             keywords = ["battery-pack"]
 
             [dependencies]
@@ -1907,6 +1910,57 @@ mod tests {
         );
     }
 
+    // -- Repository warning tests --
+
+    #[test]
+    // [verify format.crate.repository]
+    fn validate_warns_on_missing_repository() {
+        let spec = parse_battery_pack(
+            r#"
+            [package]
+            name = "test-battery-pack"
+            version = "0.1.0"
+            keywords = ["battery-pack"]
+        "#,
+        )
+        .unwrap();
+        let report = spec.validate_spec();
+        assert!(
+            !report.has_errors(),
+            "missing repository should not be an error"
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.rule == "format.crate.repository" && d.severity == Severity::Warning),
+            "should warn when repository is missing"
+        );
+    }
+
+    #[test]
+    // [verify format.crate.repository]
+    fn validate_no_warning_when_repository_present() {
+        let spec = parse_battery_pack(
+            r#"
+            [package]
+            name = "test-battery-pack"
+            version = "0.1.0"
+            repository = "https://github.com/example/repo"
+            keywords = ["battery-pack"]
+        "#,
+        )
+        .unwrap();
+        let report = spec.validate_spec();
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|d| d.rule == "format.crate.repository"),
+            "should not warn when repository is present"
+        );
+    }
+
     // -- Fixture integration tests --
 
     #[test]
@@ -1926,10 +1980,18 @@ mod tests {
 
         let mut report = spec.validate_spec();
         report.merge(validate_on_disk(&spec, &fixture));
+        // basic-battery-pack has no repository — expect a warning but no errors
         assert!(
-            report.is_clean(),
-            "basic-battery-pack should be clean: {:?}",
+            !report.has_errors(),
+            "basic-battery-pack should have no errors: {:?}",
             report.diagnostics
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.rule == "format.crate.repository" && d.severity == Severity::Warning),
+            "basic-battery-pack should warn about missing repository"
         );
     }
 
