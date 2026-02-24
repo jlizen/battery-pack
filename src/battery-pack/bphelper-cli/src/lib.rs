@@ -45,6 +45,7 @@ pub enum BpCommands {
         name: Option<String>,
 
         /// Which template to use (defaults to first available, or prompts if multiple)
+        // [impl cli.new.template-flag]
         #[arg(long, short = 't')]
         template: Option<String>,
 
@@ -140,6 +141,7 @@ pub fn main() -> Result<()> {
                 path,
             } => match battery_pack {
                 Some(name) => add_battery_pack(&name, &with, all, path.as_deref()),
+                // [impl cli.bare.tui]
                 None if std::io::stdout().is_terminal() => tui::run_add(),
                 None => {
                     bail!(
@@ -156,9 +158,13 @@ pub fn main() -> Result<()> {
                 filter,
                 non_interactive,
             } => {
+                // [impl cli.list.interactive]
+                // [impl cli.list.non-interactive]
                 if !non_interactive && std::io::stdout().is_terminal() {
                     tui::run_list(filter)
                 } else {
+                    // [impl cli.list.query]
+                    // [impl cli.list.filter]
                     print_battery_pack_list(filter.as_deref())
                 }
             }
@@ -167,6 +173,8 @@ pub fn main() -> Result<()> {
                 path,
                 non_interactive,
             } => {
+                // [impl cli.show.interactive]
+                // [impl cli.show.non-interactive]
                 if !non_interactive && std::io::stdout().is_terminal() {
                     tui::run_show(&battery_pack, path.as_deref())
                 } else {
@@ -341,6 +349,8 @@ pub struct ExampleInfo {
 // Implementation
 // ============================================================================
 
+// [impl cli.new.template]
+// [impl cli.new.path]
 fn new_from_battery_pack(
     battery_pack: &str,
     name: Option<String>,
@@ -377,6 +387,8 @@ fn new_from_battery_pack(
     generate_from_path(&crate_dir, &template_path, name)
 }
 
+// [impl cli.add.register]
+// [impl cli.add.dep-kind]
 fn add_battery_pack(
     name: &str,
     with_features: &[String],
@@ -388,6 +400,7 @@ fn add_battery_pack(
     // Step 1: Read the battery pack spec WITHOUT modifying any manifests.
     // For registry deps: download from crates.io and parse directly.
     // For path deps: read the Cargo.toml from the local path.
+    // [impl cli.add.path]
     let (bp_version, bp_spec) = if let Some(local_path) = path {
         let manifest_path = Path::new(local_path).join("Cargo.toml");
         let manifest_content = std::fs::read_to_string(&manifest_path)
@@ -407,6 +420,9 @@ fn add_battery_pack(
         && std::io::stdout().is_terminal()
         && bp_spec.has_meaningful_choices();
 
+    // [impl cli.add.default-crates]
+    // [impl cli.add.features]
+    // [impl cli.add.all-features]
     let (active_features, crates_to_sync) = if all {
         (vec!["all".to_string()], bp_spec.resolve_all())
     } else if use_picker {
@@ -547,6 +563,10 @@ fn add_battery_pack(
     Ok(())
 }
 
+// [impl cli.sync.update-versions]
+// [impl cli.sync.add-features]
+// [impl cli.sync.add-crates]
+// [impl cli.sync.non-destructive]
 fn sync_battery_packs() -> Result<()> {
     let user_manifest_path = find_user_manifest()?;
     let user_manifest_content =
@@ -1340,6 +1360,7 @@ fn parse_template_metadata(
     Ok(templates)
 }
 
+// [impl format.templates.selection]
 fn resolve_template(
     templates: &BTreeMap<String, TemplateConfig>,
     requested: Option<&str>,
@@ -1555,6 +1576,8 @@ fn short_name(crate_name: &str) -> &str {
 
 /// Convert "cli" to "cli-battery-pack" (adds suffix if not already present)
 /// Special case: "battery-pack" stays as "battery-pack" (not "battery-pack-battery-pack")
+// [impl cli.name.resolve]
+// [impl cli.name.exact]
 fn resolve_crate_name(name: &str) -> String {
     if name == "battery-pack" || name.ends_with("-battery-pack") {
         name.to_string()
@@ -1685,6 +1708,8 @@ fn build_battery_pack_detail(
     })
 }
 
+// [impl cli.show.details]
+// [impl cli.show.hidden]
 fn print_battery_pack_detail(name: &str, path: Option<&str>) -> Result<()> {
     use console::style;
 
@@ -1752,6 +1777,7 @@ fn print_battery_pack_detail(name: &str, path: Option<&str>) -> Result<()> {
         }
     }
 
+    // [impl format.examples.browsable]
     // Examples
     if !detail.examples.is_empty() {
         println!();
@@ -1807,6 +1833,7 @@ fn fetch_owners(crate_name: &str) -> Result<Vec<Owner>> {
 
 /// Scan the examples directory and extract example info.
 /// If a GitHub tree is provided, resolves the full repository path for each example.
+// [impl format.examples.standard]
 fn scan_examples(crate_dir: &std::path::Path, repo_tree: Option<&[String]>) -> Vec<ExampleInfo> {
     let examples_dir = crate_dir.join("examples");
     if !examples_dir.exists() {
@@ -1909,6 +1936,8 @@ fn find_template_path(tree: &[String], template_path: &str) -> Option<String> {
 // Validate command
 // ============================================================================
 
+// [impl cli.validate.purpose]
+// [impl cli.validate.path]
 pub fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
     let crate_root = match path {
         Some(p) => std::path::PathBuf::from(p),
@@ -1924,12 +1953,14 @@ pub fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
         .with_context(|| format!("failed to parse {}", cargo_toml.display()))?;
     if raw.get("package").is_none() {
         if raw.get("workspace").is_some() {
+            // [impl cli.validate.workspace-error]
             bail!(
                 "{} is a workspace manifest, not a battery pack crate.\n\
                  Run this from a battery pack crate directory, or use --path to point to one.",
                 cargo_toml.display()
             );
         } else {
+            // [impl cli.validate.no-package]
             bail!(
                 "{} has no [package] section — is this a battery pack crate?",
                 cargo_toml.display()
@@ -1940,14 +1971,18 @@ pub fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
     let spec = bphelper_manifest::parse_battery_pack(&content)
         .with_context(|| format!("failed to parse {}", cargo_toml.display()))?;
 
+    // [impl cli.validate.checks]
     let mut report = spec.validate_spec();
     report.merge(bphelper_manifest::validate_on_disk(&spec, &crate_root));
 
+    // [impl cli.validate.clean]
     if report.is_clean() {
         println!("{} is valid", spec.name);
         return Ok(());
     }
 
+    // [impl cli.validate.severity]
+    // [impl cli.validate.rule-id]
     let mut errors = 0;
     let mut warnings = 0;
     for diag in &report.diagnostics {
@@ -1963,6 +1998,7 @@ pub fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
         }
     }
 
+    // [impl cli.validate.errors]
     if errors > 0 {
         bail!(
             "validation failed: {} error(s), {} warning(s)",
@@ -1971,6 +2007,7 @@ pub fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
         );
     }
 
+    // [impl cli.validate.warnings-only]
     // Warnings only — still succeeds
     println!("{} is valid ({} warning(s))", spec.name, warnings);
     Ok(())

@@ -507,6 +507,7 @@ pub fn parse_battery_pack(manifest_str: &str) -> Result<BatteryPackSpec, Error> 
         .map(|bp| bp.hidden.clone())
         .unwrap_or_default();
 
+    // [impl format.templates.metadata]
     // Parse templates from package.metadata.battery.templates
     let templates = package
         .metadata
