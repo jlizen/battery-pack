@@ -3,10 +3,12 @@ members = [
     "src/battery-pack",
     "src/battery-pack/bphelper-cli",
     "src/battery-pack/bphelper-manifest",
+    "src/error-battery-pack",
 ]
 resolver = "2"
 
 [workspace.dependencies]
+battery-pack = { path = "src/battery-pack", version = "0.4" }
 anyhow = "1"
 cargo-generate = "0.22"
 cargo_metadata = "0.23"

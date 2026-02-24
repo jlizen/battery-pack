@@ -1,0 +1,15 @@
+[package]
+name = "error-battery-pack"
+version = "0.1.0"
+edition = "2024"
+description = "Error handling done well"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["battery-pack"]
+
+[dependencies]
+battery-pack.workspace = true
+
+[dev-dependencies]
+anyhow = "1"
+thiserror = "2"

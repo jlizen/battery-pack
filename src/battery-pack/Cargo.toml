@@ -1,6 +1,6 @@
 [package]
 name = "battery-pack"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "Curated crate bundles with docs, templates, and agentic skills"
 license = "MIT OR Apache-2.0"
@@ -30,7 +30,7 @@ path = "src/main.rs"
 
 [dependencies]
 bphelper-cli = { path = "bphelper-cli", version = "0.4.0" }
-bphelper-manifest = { path = "bphelper-manifest", version = "0.4.0" }
+bphelper-manifest = { path = "bphelper-manifest", version = "0.4.1" }
 anyhow.workspace = true
 
 [dev-dependencies]

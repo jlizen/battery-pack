@@ -5,7 +5,7 @@ const SELF_MANIFEST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/C
 /// Call this from your build.rs:
 /// ```rust,ignore
 /// fn main() {
-///     {{crate_name}}::validate();
+///     error_battery_pack::validate();
 /// }
 /// ```
 pub fn validate() {

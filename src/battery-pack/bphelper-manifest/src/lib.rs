@@ -379,6 +379,33 @@ pub fn check_drift(bp: &BatteryPackSpec, user: &UserManifest) {
     }
 }
 
+/// Assert that a battery pack manifest has no regular dependencies other than `battery-pack`.
+///
+/// Battery packs should only declare curated crates as `[dev-dependencies]`.
+/// Call this from a `#[test]` in your battery pack's lib.rs:
+///
+/// ```rust,ignore
+/// #[test]
+/// fn no_regular_deps() {
+///     battery_pack::assert_no_regular_deps(
+///         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+///     );
+/// }
+/// ```
+pub fn assert_no_regular_deps(manifest: &str) {
+    let raw: RawManifest = toml::from_str(manifest).expect("failed to parse Cargo.toml");
+    let non_bp_deps: Vec<_> = raw
+        .dependencies
+        .keys()
+        .filter(|k| *k != "battery-pack")
+        .collect();
+    assert!(
+        non_bp_deps.is_empty(),
+        "Battery packs must only use [dev-dependencies] (plus battery-pack). Found: {:?}",
+        non_bp_deps
+    );
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

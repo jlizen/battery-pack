@@ -26,7 +26,7 @@
 //! }
 //! ```
 
-pub use bphelper_manifest::{BatteryPackSpec, DepSpec};
+pub use bphelper_manifest::{BatteryPackSpec, DepSpec, assert_no_regular_deps};
 
 /// Validate that the calling crate's dependencies match a battery pack's specs.
 ///
