@@ -1,24 +1,42 @@
 # error-battery-pack
 
-A curated battery pack for ...
+Error handling done well. A [battery pack](https://crates.io/crates/battery-pack) that curates the essential error handling crates for Rust.
 
 ## What's Included
 
-<!-- List your curated crates here -->
+| Crate | What it does |
+|-------|-------------|
+| [anyhow](https://crates.io/crates/anyhow) | Ergonomic error handling for applications — `Result<T>`, `.context()`, error chaining |
+| [thiserror](https://crates.io/crates/thiserror) | Derive macros for defining custom error types in libraries |
 
-## Usage
+## Quick Start
 
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-error-battery-pack = "0.1"
+```sh
+cargo bp add error
 ```
 
-Then use the re-exported crates:
+This adds `anyhow` and `thiserror` to your `[dependencies]` and sets up build-time validation.
 
-```rust
-use error_battery_pack::*;
+## When to Use Which
+
+- **anyhow** — Use in application code (binaries, CLI tools, servers) where you want to propagate errors with context and don't need callers to match on specific variants.
+- **thiserror** — Use in library code where callers need to inspect and match on specific error variants.
+
+They compose naturally: library functions return `Result<T, MyError>` (thiserror), and application code wraps them with `anyhow::Result<T>` adding `.context()`.
+
+## Examples
+
+Run the included examples to see the patterns in action:
+
+```sh
+# Basic anyhow usage with .context()
+cargo run --example basic -p error-battery-pack
+
+# Custom error types with thiserror + anyhow interop
+cargo run --example custom-errors -p error-battery-pack
+
+# Multi-layer error context chains
+cargo run --example context-chain -p error-battery-pack
 ```
 
 ## License
