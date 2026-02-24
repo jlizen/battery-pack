@@ -11,6 +11,7 @@ keywords = ["battery-pack", "cli", "cargo"]
 bphelper-manifest = { path = "../bphelper-manifest", version = "0.3.0" }
 clap.workspace = true
 cargo-generate.workspace = true
+cargo_metadata.workspace = true
 anyhow.workspace = true
 reqwest.workspace = true
 serde.workspace = true
