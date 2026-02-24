@@ -57,17 +57,17 @@ pub enum BpCommands {
     ///
     /// Without arguments, opens an interactive TUI for managing all battery packs.
     /// With a battery pack name, adds that specific pack (with an interactive picker
-    /// for choosing crates if the pack has sets or many dependencies).
+    /// for choosing crates if the pack has features or many dependencies).
     Add {
         /// Name of the battery pack (e.g., "cli" resolves to "cli-battery-pack").
         /// Omit to open the interactive manager.
         battery_pack: Option<String>,
 
-        /// Named sets to enable (in addition to the default set)
+        /// Named features to enable (in addition to the default feature)
         #[arg(long, short = 'w')]
         with: Vec<String>,
 
-        /// Sync all dev-dependencies regardless of default set
+        /// Sync all dev-dependencies regardless of default feature
         #[arg(long)]
         all: bool,
 
@@ -79,10 +79,10 @@ pub enum BpCommands {
     /// Update dependencies from installed battery packs
     Sync,
 
-    /// Enable a named set from a battery pack
+    /// Enable a named feature from a battery pack
     Enable {
-        /// Name of the set to enable
-        set_name: String,
+        /// Name of the feature to enable
+        feature_name: String,
 
         /// Battery pack to search (optional — searches all installed if omitted)
         #[arg(long)]
@@ -149,9 +149,9 @@ pub fn main() -> Result<()> {
             },
             BpCommands::Sync => sync_battery_packs(),
             BpCommands::Enable {
-                set_name,
+                feature_name,
                 battery_pack,
-            } => enable_set(&set_name, battery_pack.as_deref()),
+            } => enable_feature(&feature_name, battery_pack.as_deref()),
             BpCommands::List {
                 filter,
                 non_interactive,
@@ -377,7 +377,12 @@ fn new_from_battery_pack(
     generate_from_path(&crate_dir, &template_path, name)
 }
 
-fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&str>) -> Result<()> {
+fn add_battery_pack(
+    name: &str,
+    with_features: &[String],
+    all: bool,
+    path: Option<&str>,
+) -> Result<()> {
     let crate_name = resolve_crate_name(name);
 
     // Step 1: Read the battery pack spec WITHOUT modifying any manifests.
@@ -398,26 +403,26 @@ fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&s
     // Step 2: Determine which crates to install — interactive picker, explicit flags, or defaults.
     // No manifest changes have been made yet, so cancellation is free.
     let use_picker = !all
-        && with_sets.is_empty()
+        && with_features.is_empty()
         && std::io::stdout().is_terminal()
         && bp_spec.has_meaningful_choices();
 
-    let (active_sets, crates_to_sync) = if all {
+    let (active_features, crates_to_sync) = if all {
         (vec!["all".to_string()], bp_spec.resolve_all())
     } else if use_picker {
         match pick_crates_interactive(&bp_spec)? {
-            Some(result) => (result.active_sets, result.crates),
+            Some(result) => (result.active_features, result.crates),
             None => {
                 println!("Cancelled.");
                 return Ok(());
             }
         }
     } else {
-        let mut sets = vec!["default".to_string()];
-        sets.extend(with_sets.iter().cloned());
-        let str_sets: Vec<&str> = sets.iter().map(|s| s.as_str()).collect();
-        let crates = bp_spec.resolve_crates(&str_sets);
-        (sets, crates)
+        let mut features = vec!["default".to_string()];
+        features.extend(with_features.iter().cloned());
+        let str_features: Vec<&str> = features.iter().map(|s| s.as_str()).collect();
+        let crates = bp_spec.resolve_crates(&str_features);
+        (features, crates)
     };
 
     if crates_to_sync.is_empty() {
@@ -510,14 +515,14 @@ fn add_battery_pack(name: &str, with_sets: &[String], all: bool, path: Option<&s
         }
     }
 
-    // Record active sets in [package.metadata.battery-pack.<crate-name>]
+    // Record active features in [package.metadata.battery-pack.<crate-name>]
     let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&crate_name];
-    let mut sets_array = toml_edit::Array::new();
-    for set in &active_sets {
-        sets_array.push(set.as_str());
+    let mut features_array = toml_edit::Array::new();
+    for feature in &active_features {
+        features_array.push(feature.as_str());
     }
     *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
-    bp_meta["sets"] = toml_edit::value(sets_array);
+    bp_meta["features"] = toml_edit::value(features_array);
 
     // Write the final Cargo.toml
     std::fs::write(&user_manifest_path, user_doc.to_string())
@@ -565,14 +570,14 @@ fn sync_battery_packs() -> Result<()> {
         // Get the battery pack spec
         let bp_spec = fetch_battery_pack_spec(bp_name)?;
 
-        // Read active sets from user metadata
-        let active_sets = read_active_sets(&user_manifest_content, bp_name);
+        // Read active features from user metadata
+        let active_features = read_active_features(&user_manifest_content, bp_name);
 
-        let expected = if active_sets.iter().any(|s| s == "all") {
+        let expected = if active_features.iter().any(|s| s == "all") {
             bp_spec.resolve_all()
         } else {
-            let str_sets: Vec<&str> = active_sets.iter().map(|s| s.as_str()).collect();
-            bp_spec.resolve_crates(&str_sets)
+            let str_features: Vec<&str> = active_features.iter().map(|s| s.as_str()).collect();
+            bp_spec.resolve_crates(&str_features)
         };
 
         // Sync each crate
@@ -643,12 +648,12 @@ fn sync_battery_packs() -> Result<()> {
     Ok(())
 }
 
-fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
+fn enable_feature(feature_name: &str, battery_pack: Option<&str>) -> Result<()> {
     let user_manifest_path = find_user_manifest()?;
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
 
-    // Find which battery pack has this set
+    // Find which battery pack has this feature
     let bp_name = if let Some(name) = battery_pack {
         resolve_crate_name(name)
     } else {
@@ -658,39 +663,45 @@ fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
         let mut found = None;
         for name in &bp_names {
             let spec = fetch_battery_pack_spec(name)?;
-            if spec.features.contains_key(set_name) {
+            if spec.features.contains_key(feature_name) {
                 found = Some(name.clone());
                 break;
             }
         }
         found.ok_or_else(|| {
-            anyhow::anyhow!("No installed battery pack defines set '{}'", set_name)
+            anyhow::anyhow!(
+                "No installed battery pack defines feature '{}'",
+                feature_name
+            )
         })?
     };
 
     let bp_spec = fetch_battery_pack_spec(&bp_name)?;
 
-    if !bp_spec.features.contains_key(set_name) {
+    if !bp_spec.features.contains_key(feature_name) {
         let available: Vec<_> = bp_spec.features.keys().collect();
         bail!(
-            "Battery pack '{}' has no set '{}'. Available: {:?}",
+            "Battery pack '{}' has no feature '{}'. Available: {:?}",
             bp_name,
-            set_name,
+            feature_name,
             available
         );
     }
 
-    // Add set to active sets
-    let mut active_sets = read_active_sets(&user_manifest_content, &bp_name);
-    if active_sets.contains(&set_name.to_string()) {
-        println!("Set '{}' is already active for {}.", set_name, bp_name);
+    // Add feature to active features
+    let mut active_features = read_active_features(&user_manifest_content, &bp_name);
+    if active_features.contains(&feature_name.to_string()) {
+        println!(
+            "Feature '{}' is already active for {}.",
+            feature_name, bp_name
+        );
         return Ok(());
     }
-    active_sets.push(set_name.to_string());
+    active_features.push(feature_name.to_string());
 
     // Resolve what this changes
-    let str_sets: Vec<&str> = active_sets.iter().map(|s| s.as_str()).collect();
-    let crates_to_sync = bp_spec.resolve_crates(&str_sets);
+    let str_features: Vec<&str> = active_features.iter().map(|s| s.as_str()).collect();
+    let crates_to_sync = bp_spec.resolve_crates(&str_features);
 
     // Update user manifest
     let mut user_doc: toml_edit::DocumentMut = user_manifest_content
@@ -743,19 +754,19 @@ fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
         }
     }
 
-    // Update active sets in metadata
+    // Update active features in metadata
     let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&bp_name];
-    let mut sets_array = toml_edit::Array::new();
-    for set in &active_sets {
-        sets_array.push(set.as_str());
+    let mut features_array = toml_edit::Array::new();
+    for feature in &active_features {
+        features_array.push(feature.as_str());
     }
     *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
-    bp_meta["sets"] = toml_edit::value(sets_array);
+    bp_meta["features"] = toml_edit::value(features_array);
 
     std::fs::write(&user_manifest_path, user_doc.to_string())
         .context("Failed to write Cargo.toml")?;
 
-    println!("Enabled set '{}' from {}", set_name, bp_name);
+    println!("Enabled feature '{}' from {}", feature_name, bp_name);
     Ok(())
 }
 
@@ -767,8 +778,8 @@ fn enable_set(set_name: &str, battery_pack: Option<&str>) -> Result<()> {
 struct PickerResult {
     /// The resolved crates to install (name -> dep spec with merged features).
     crates: BTreeMap<String, bphelper_manifest::CrateSpec>,
-    /// Which set names are fully selected (for metadata recording).
-    active_sets: Vec<String>,
+    /// Which feature names are fully selected (for metadata recording).
+    active_features: Vec<String>,
 }
 
 /// Show an interactive multi-select picker for choosing which crates to install.
@@ -844,20 +855,20 @@ fn pick_crates_interactive(
     }
 
     // Determine which features are "fully selected" for metadata
-    let mut active_sets = vec!["default".to_string()];
+    let mut active_features = vec!["default".to_string()];
     for (feature_name, feature_crates) in &bp_spec.features {
         if feature_name == "default" {
             continue;
         }
         let all_selected = feature_crates.iter().all(|c| crates.contains_key(c));
         if all_selected {
-            active_sets.push(feature_name.clone());
+            active_features.push(feature_name.clone());
         }
     }
 
     Ok(Some(PickerResult {
         crates,
-        active_sets,
+        active_features,
     }))
 }
 
@@ -1021,8 +1032,8 @@ fn sync_dep_in_table(
     changed
 }
 
-/// Read active sets for a battery pack from user's metadata.
-fn read_active_sets(manifest_content: &str, bp_name: &str) -> Vec<String> {
+/// Read active features for a battery pack from user's metadata.
+fn read_active_features(manifest_content: &str, bp_name: &str) -> Vec<String> {
     let raw: toml::Value = match toml::from_str(manifest_content) {
         Ok(v) => v,
         Err(_) => return vec!["default".to_string()],
@@ -1032,7 +1043,7 @@ fn read_active_sets(manifest_content: &str, bp_name: &str) -> Vec<String> {
         .and_then(|p| p.get("metadata"))
         .and_then(|m| m.get("battery-pack"))
         .and_then(|bp| bp.get(bp_name))
-        .and_then(|entry| entry.get("sets"))
+        .and_then(|entry| entry.get("features"))
         .and_then(|sets| sets.as_array())
         .map(|arr| {
             arr.iter()
@@ -1408,13 +1419,13 @@ pub struct InstalledPack {
     pub short_name: String,
     pub version: String,
     pub spec: bphelper_manifest::BatteryPackSpec,
-    pub active_sets: Vec<String>,
+    pub active_features: Vec<String>,
 }
 
-/// Load all installed battery packs with their specs and active sets.
+/// Load all installed battery packs with their specs and active features.
 ///
 /// Reads `[build-dependencies]` from the user's Cargo.toml, fetches each
-/// battery pack's spec via cargo metadata, and reads active sets from
+/// battery pack's spec via cargo metadata, and reads active features from
 /// `[package.metadata.battery-pack]`.
 pub fn load_installed_packs() -> Result<Vec<InstalledPack>> {
     let user_manifest_path = find_user_manifest()?;
@@ -1426,13 +1437,13 @@ pub fn load_installed_packs() -> Result<Vec<InstalledPack>> {
     let mut packs = Vec::new();
     for bp_name in bp_names {
         let spec = fetch_battery_pack_spec(&bp_name)?;
-        let active_sets = read_active_sets(&user_manifest_content, &bp_name);
+        let active_features = read_active_features(&user_manifest_content, &bp_name);
         packs.push(InstalledPack {
             short_name: short_name(&bp_name).to_string(),
             version: spec.version.clone(),
             spec,
             name: bp_name,
-            active_sets,
+            active_features,
         });
     }
 

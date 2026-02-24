@@ -51,16 +51,12 @@ struct App {
 /// A single crate being added or updated.
 struct CrateChange {
     name: String,
-    version: String,
-    features: Vec<String>,
 }
 
 impl From<&CrateEntry> for CrateChange {
     fn from(entry: &CrateEntry) -> Self {
         Self {
             name: entry.name.clone(),
-            version: entry.version.clone(),
-            features: entry.features.clone(),
         }
     }
 }
@@ -436,11 +432,12 @@ fn build_installed_state(packs: Vec<InstalledPack>) -> InstalledState {
         .into_iter()
         .map(|pack| {
             let grouped = pack.spec.all_crates_with_grouping();
-            let resolved = if pack.active_sets.iter().any(|s| s == "all") {
+            let resolved = if pack.active_features.iter().any(|s| s == "all") {
                 pack.spec.resolve_all()
             } else {
-                let str_sets: Vec<&str> = pack.active_sets.iter().map(|s| s.as_str()).collect();
-                pack.spec.resolve_crates(&str_sets)
+                let str_features: Vec<&str> =
+                    pack.active_features.iter().map(|s| s.as_str()).collect();
+                pack.spec.resolve_crates(&str_features)
             };
 
             let entries = grouped
