@@ -86,16 +86,15 @@ fn cli_bare_help_prints_help() {
     // We verify this by attempting to parse the args and checking for the
     // expected clap error kind.
     use clap::Parser;
-    let result = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "--help"]);
-    assert!(
-        result.is_err(),
-        "--help should cause clap to 'error' with DisplayHelp"
-    );
-    let err = result.unwrap_err();
-    assert_eq!(
-        err.kind(),
-        clap::error::ErrorKind::DisplayHelp,
-        "expected DisplayHelp, got {:?}",
-        err.kind()
-    );
+    match bphelper_cli::Cli::try_parse_from(["cargo", "bp", "--help"]) {
+        Ok(_) => panic!("--help should cause clap to return a DisplayHelp error"),
+        Err(err) => {
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::DisplayHelp,
+                "expected DisplayHelp, got {:?}",
+                err.kind()
+            );
+        }
+    }
 }
