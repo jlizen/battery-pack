@@ -15,6 +15,7 @@ mod tui;
 const CRATES_IO_API: &str = "https://crates.io/api/v1/crates";
 const CRATES_IO_CDN: &str = "https://static.crates.io/crates";
 
+// [impl cli.bare.help]
 #[derive(Parser)]
 #[command(name = "cargo-bp")]
 #[command(bin_name = "cargo")]
@@ -987,6 +988,7 @@ fn find_workspace_manifest(crate_manifest: &Path) -> Result<Option<std::path::Pa
 /// Add a dependency to a toml_edit table (non-workspace mode).
 // [impl manifest.deps.add]
 // [impl manifest.deps.version-features]
+// [impl manifest.toml.style]
 pub fn add_dep_to_table(
     table: &mut toml_edit::Table,
     name: &str,
@@ -1009,9 +1011,32 @@ pub fn add_dep_to_table(
     }
 }
 
+/// Return true when `recommended` is strictly newer than `current` (semver).
+///
+/// Falls back to string equality when either side is not a valid semver
+/// version, so non-standard version strings still get updated when they
+/// differ.
+fn should_upgrade_version(current: &str, recommended: &str) -> bool {
+    match (
+        semver::Version::parse(current)
+            .or_else(|_| semver::Version::parse(&format!("{}.0", current)))
+            .or_else(|_| semver::Version::parse(&format!("{}.0.0", current))),
+        semver::Version::parse(recommended)
+            .or_else(|_| semver::Version::parse(&format!("{}.0", recommended)))
+            .or_else(|_| semver::Version::parse(&format!("{}.0.0", recommended))),
+    ) {
+        // [impl manifest.sync.version-bump]
+        // [impl manifest.sync.no-downgrade]
+        (Ok(cur), Ok(rec)) => rec > cur,
+        // Non-parseable: fall back to "update if different"
+        _ => current != recommended,
+    }
+}
+
 /// Sync a dependency in-place: update version if behind, add missing features.
 /// Returns true if changes were made.
 // [impl manifest.deps.existing]
+// [impl manifest.toml.style]
 pub fn sync_dep_in_table(
     table: &mut toml_edit::Table,
     name: &str,
@@ -1027,27 +1052,48 @@ pub fn sync_dep_in_table(
 
     match existing {
         toml_edit::Item::Value(toml_edit::Value::String(version_str)) => {
-            // Simple version string — check if we need to upgrade or add features
+            // Simple version string — check if we need to upgrade
             let current = version_str.value().to_string();
-            if !spec.version.is_empty() && current != spec.version {
+            // [impl manifest.sync.version-bump]
+            // [impl manifest.sync.no-downgrade]
+            if !spec.version.is_empty() && should_upgrade_version(&current, &spec.version) {
                 *version_str = toml_edit::Formatted::new(spec.version.clone());
                 changed = true;
             }
+            // [impl manifest.sync.feature-add]
             if !spec.features.is_empty() {
-                // Need to convert from simple string to table format
-                add_dep_to_table(table, name, spec);
+                // Need to convert from simple string to table format;
+                // use the higher of the two versions so we never downgrade.
+                let keep_version = if !spec.version.is_empty()
+                    && should_upgrade_version(&current, &spec.version)
+                {
+                    spec.version.clone()
+                } else {
+                    current.clone()
+                };
+                let patched = bphelper_manifest::CrateSpec {
+                    version: keep_version,
+                    features: spec.features.clone(),
+                    dep_kind: spec.dep_kind.clone(),
+                    optional: spec.optional,
+                };
+                add_dep_to_table(table, name, &patched);
                 changed = true;
             }
         }
         toml_edit::Item::Value(toml_edit::Value::InlineTable(inline)) => {
             // Check version
+            // [impl manifest.sync.version-bump]
+            // [impl manifest.sync.no-downgrade]
             if let Some(toml_edit::Value::String(v)) = inline.get_mut("version") {
-                if !spec.version.is_empty() && v.value() != &spec.version {
+                if !spec.version.is_empty() && should_upgrade_version(v.value(), &spec.version) {
                     *v = toml_edit::Formatted::new(spec.version.clone());
                     changed = true;
                 }
             }
-            // Check features — add missing ones
+            // [impl manifest.sync.feature-add]
+            // [impl manifest.sync.no-feature-remove]
+            // Check features — add missing ones, never remove existing
             if !spec.features.is_empty() {
                 let existing_features: Vec<String> = inline
                     .get("features")
@@ -1060,6 +1106,7 @@ pub fn sync_dep_in_table(
                     .unwrap_or_default();
 
                 let mut needs_update = false;
+                // [impl manifest.sync.no-feature-remove]
                 let mut all_features = existing_features.clone();
                 for feat in &spec.features {
                     if !existing_features.contains(feat) {
