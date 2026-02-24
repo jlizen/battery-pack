@@ -104,18 +104,16 @@ individual selection in the TUI.
 
 ### Feature augmentation
 
-A feature can add Cargo features to a crate, not just toggle it on:
+A feature can add Cargo features to a crate, not just toggle it on.
+This uses Cargo's native `dep/feature` syntax:
 
 ```toml
-[dev-dependencies]
+[dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 
 [features]
 default = ["tokio"]
-tokio-full = ["tokio"]  # same crate, but...
-
-# In [package.metadata.battery-pack.feature-augment]
-# tokio-full adds features = ["full"] to tokio
+tokio-full = ["tokio/full"]
 ```
 
 Enabling `tokio-full` keeps `tokio` but adds the `full` feature on top

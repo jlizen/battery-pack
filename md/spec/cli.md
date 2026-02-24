@@ -28,6 +28,28 @@ The `--source` flag MUST be accepted by all subcommands that
 resolve battery packs: `add`, `new`, `show`, `list`, `status`,
 and `sync`, as well as the bare `cargo bp` TUI.
 
+r[cli.source.scope]
+The `--source` flag is a per-invocation option that adds
+additional directories to the set of places `cargo bp` searches
+for battery packs. It does not persist across invocations.
+
+## Path flag
+
+r[cli.path.flag]
+`cargo bp --path <path>` MUST read a battery pack from the
+given directory. Unlike `--source`, which adds a searchable
+workspace, `--path` identifies a single battery pack directory
+directly.
+
+r[cli.path.subcommands]
+The `--path` flag MUST be accepted by all subcommands that
+operate on a specific battery pack: `add`, `new`, `show`,
+`validate`, `status`, and `sync`.
+
+r[cli.path.no-resolve]
+When `--path` is provided, name resolution is not needed.
+The battery pack is read directly from the given directory.
+
 ## Name resolution
 
 r[cli.name.resolve]
@@ -80,14 +102,25 @@ r[cli.add.specific-crates]
 `cargo bp add <pack> <crate> [<crate>...]` MUST add only the
 named crates from the battery pack, ignoring defaults and features.
 
-r[cli.add.path]
-`cargo bp add <pack> --path <path>` MUST read the battery pack
-from a local directory instead of downloading from crates.io.
-
 r[cli.add.dep-kind]
 Each crate MUST be added with the dependency kind matching its
 section in the battery pack's Cargo.toml (regular, dev, or build),
 unless the user overrides it.
+
+r[cli.add.target]
+`cargo bp add <pack> --target <level>` controls where the battery
+pack registration is stored. The `<level>` MUST be one of:
+- `workspace` — register in `[workspace.metadata.battery-pack]`
+- `package` — register in `[package.metadata.battery-pack]`
+- `default` — use workspace if a workspace root exists, otherwise package
+
+If `--target` is not specified, the default behavior MUST be used.
+
+r[cli.add.unknown-crate]
+When specific crates are named (`cargo bp add <pack> <crate>...`)
+and a named crate does not exist in the battery pack, `cargo bp`
+MUST report an error for that crate. Other valid crates in the
+same command MUST still be processed.
 
 r[cli.add.idempotent]
 Adding a battery pack that is already registered MUST NOT create
@@ -100,9 +133,13 @@ r[cli.new.template]
 `cargo bp new <pack>` MUST create a new project from the battery
 pack's template using cargo-generate.
 
+r[cli.new.name-flag]
+`cargo bp new <pack> --name <name>` MUST pass the project name
+to cargo-generate, skipping the name prompt.
+
 r[cli.new.name-prompt]
 If `--name` is not provided, the CLI MUST prompt the user for
-a project name.
+a project name (via cargo-generate).
 
 r[cli.new.template-select]
 If the battery pack has multiple templates and `--template` is not
@@ -111,10 +148,6 @@ provided, the CLI MUST prompt the user to select one.
 r[cli.new.template-flag]
 `cargo bp new <pack> --template <name>` MUST use the specified template
 without prompting.
-
-r[cli.new.path]
-`cargo bp new <pack> --path <path>` MUST read the battery pack
-from a local directory instead of downloading from crates.io.
 
 ## `cargo bp status`
 
@@ -175,10 +208,9 @@ r[cli.validate.purpose]
 `cargo bp validate` MUST check whether a battery pack crate
 conforms to the battery pack format specification (`format.*` rules).
 
-r[cli.validate.path]
-`cargo bp validate --path <path>` MUST validate the battery pack
-at the given directory. If `--path` is not provided, the current
-directory MUST be used.
+r[cli.validate.default-path]
+If `--path` is not provided, `cargo bp validate` MUST validate
+the battery pack in the current directory.
 
 r[cli.validate.checks]
 `cargo bp validate` MUST check all applicable `format.*` rules,

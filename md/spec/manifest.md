@@ -81,6 +81,25 @@ it from the appropriate dependency section. If using workspace
 dependencies, the `workspace.dependencies` entry SHOULD be preserved
 (other crates in the workspace may use it).
 
+## Cross-pack merging
+
+r[manifest.merge.version]
+When multiple battery packs recommend the same crate, `cargo bp`
+MUST use the newest version. This applies even across major versions —
+the highest version always wins.
+
+r[manifest.merge.features]
+When multiple battery packs recommend the same crate with different
+Cargo features, `cargo bp` MUST union (merge) all the features.
+
+r[manifest.merge.dep-kind]
+When multiple battery packs recommend the same crate with different
+dependency kinds, `cargo bp` MUST resolve as follows:
+- If any pack lists the crate in `[dependencies]`, it MUST be added
+  as a regular dependency (the widest scope).
+- If one pack lists it in `[dev-dependencies]` and another in
+  `[build-dependencies]`, it MUST be added to both sections.
+
 ## Sync behavior
 
 r[manifest.sync.version-bump]

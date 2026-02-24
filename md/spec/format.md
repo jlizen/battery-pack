@@ -21,6 +21,12 @@ A battery pack crate MUST NOT contain functional Rust code
 (beyond the doc include and build.rs for doc generation).
 It exists purely as a metadata and documentation vehicle.
 
+r[format.crate.repository]
+A battery pack crate SHOULD set the `repository` field in its
+`[package]` section. The repository URL is used to link to
+examples and templates in `cargo bp show` and the TUI.
+`cargo bp validate` MUST warn if the repository URL is not set.
+
 ## Dependencies as curation
 
 r[format.deps.source-of-truth]
@@ -64,8 +70,11 @@ whatever is already enabled. Features never remove crates.
 
 r[format.features.augment]
 A feature MAY augment the Cargo features of a crate that is already
-included via another feature or the default set. When augmenting,
-the specified Cargo features are unioned with the existing set.
+included via another feature or the default set. Augmentation
+uses Cargo's native `dep/feature` syntax in `[features]`
+(e.g., `tokio-full = ["tokio/full"]`). No custom metadata is
+required. When augmenting, the specified Cargo features are
+unioned with the existing set.
 
 ## Hidden dependencies
 
@@ -118,3 +127,12 @@ They follow normal Cargo conventions and are runnable with `cargo run --example`
 r[format.examples.browsable]
 Examples MUST be listed in `cargo bp show` output and in the TUI's
 detail view for the battery pack.
+
+## Scaffolding
+
+r[format.scaffold.template]
+The `battery-pack` crate (the CLI itself) MUST include a built-in
+template for authoring new battery packs. Running
+`cargo bp new battery-pack` MUST create a new battery pack project
+with the standard structure (Cargo.toml, README.md,
+docs.handlebars.md, src/lib.rs, examples/, templates/).
