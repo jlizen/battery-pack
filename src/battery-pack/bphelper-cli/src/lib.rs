@@ -1898,7 +1898,7 @@ fn find_template_path(tree: &[String], template_path: &str) -> Option<String> {
 // Validate command
 // ============================================================================
 
-fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
+pub fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
     let crate_root = match path {
         Some(p) => std::path::PathBuf::from(p),
         None => std::env::current_dir().context("failed to get current directory")?,

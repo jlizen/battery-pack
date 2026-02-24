@@ -169,6 +169,55 @@ in the interactive TUI.
 r[cli.list.non-interactive]
 `cargo bp list --non-interactive` MUST print results as plain text.
 
+## `cargo bp validate`
+
+r[cli.validate.purpose]
+`cargo bp validate` MUST check whether a battery pack crate
+conforms to the battery pack format specification (`format.*` rules).
+
+r[cli.validate.path]
+`cargo bp validate --path <path>` MUST validate the battery pack
+at the given directory. If `--path` is not provided, the current
+directory MUST be used.
+
+r[cli.validate.checks]
+`cargo bp validate` MUST check all applicable `format.*` rules,
+including both data-level checks (from the parsed `Cargo.toml`)
+and filesystem-level checks (on-disk structure).
+
+r[cli.validate.severity]
+Violations of MUST rules MUST be reported as errors.
+Violations of SHOULD rules MUST be reported as warnings.
+
+r[cli.validate.rule-id]
+Each diagnostic MUST include the spec rule ID in its output
+(e.g., `error[format.crate.name]: ...`).
+
+r[cli.validate.clean]
+When a battery pack passes all checks with no diagnostics,
+`cargo bp validate` MUST print `<name> is valid` and exit
+successfully.
+
+r[cli.validate.warnings-only]
+When a battery pack has warnings but no errors,
+`cargo bp validate` MUST print `<name> is valid (<N> warning(s))`
+and exit successfully.
+
+r[cli.validate.errors]
+When a battery pack has one or more errors, `cargo bp validate`
+MUST exit with a non-zero status.
+
+r[cli.validate.workspace-error]
+If the target `Cargo.toml` is a workspace manifest (contains
+`[workspace]` but no `[package]`), `cargo bp validate` MUST
+report a clear error directing the user to run from a battery
+pack crate directory or use `--path`.
+
+r[cli.validate.no-package]
+If the target `Cargo.toml` has no `[package]` section and is not
+a workspace manifest, `cargo bp validate` MUST report a clear
+error indicating the file is not a battery pack crate.
+
 ## `cargo bp show`
 
 r[cli.show.details]
