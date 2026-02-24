@@ -1908,6 +1908,24 @@ fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
     let content = std::fs::read_to_string(&cargo_toml)
         .with_context(|| format!("failed to read {}", cargo_toml.display()))?;
 
+    // Check for virtual/workspace manifest before attempting battery pack parse
+    let raw: toml::Value = toml::from_str(&content)
+        .with_context(|| format!("failed to parse {}", cargo_toml.display()))?;
+    if raw.get("package").is_none() {
+        if raw.get("workspace").is_some() {
+            bail!(
+                "{} is a workspace manifest, not a battery pack crate.\n\
+                 Run this from a battery pack crate directory, or use --path to point to one.",
+                cargo_toml.display()
+            );
+        } else {
+            bail!(
+                "{} has no [package] section — is this a battery pack crate?",
+                cargo_toml.display()
+            );
+        }
+    }
+
     let spec = bphelper_manifest::parse_battery_pack(&content)
         .with_context(|| format!("failed to parse {}", cargo_toml.display()))?;
 
