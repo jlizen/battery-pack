@@ -787,9 +787,13 @@ fn find_user_manifest() -> Result<std::path::PathBuf> {
 /// Find the workspace root Cargo.toml, if any.
 /// Returns None if the crate is not in a workspace.
 fn find_workspace_manifest(crate_manifest: &Path) -> Result<Option<std::path::PathBuf>> {
-    let crate_dir = crate_manifest
-        .parent()
-        .unwrap_or(Path::new("."))
+    let parent = crate_manifest.parent().unwrap_or(Path::new("."));
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    let crate_dir = parent
         .canonicalize()
         .context("Failed to resolve crate directory")?;
 
