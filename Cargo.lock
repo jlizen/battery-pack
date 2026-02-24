@@ -151,9 +151,20 @@ name = "battery-pack"
 version = "0.4.2"
 dependencies = [
  "anyhow",
- "bphelper-cli",
- "bphelper-manifest",
+ "bphelper-cli 0.4.0",
+ "bphelper-manifest 0.4.1",
  "expect-test",
+]
+
+[[package]]
+name = "battery-pack"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45185f490186e1d7e4a5742e5a3ef85a7d4dd7626d8b19b97e148a7ac8c24de6"
+dependencies = [
+ "anyhow",
+ "bphelper-cli 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bphelper-manifest 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -176,7 +187,34 @@ name = "bphelper-cli"
 version = "0.4.0"
 dependencies = [
  "anyhow",
- "bphelper-manifest",
+ "bphelper-manifest 0.4.1",
+ "cargo-generate",
+ "cargo_metadata",
+ "clap",
+ "console",
+ "crossterm",
+ "dialoguer",
+ "flate2",
+ "open",
+ "ratatui",
+ "reqwest",
+ "serde",
+ "syn",
+ "tar",
+ "tempfile",
+ "toml",
+ "toml_edit",
+ "urlencoding",
+]
+
+[[package]]
+name = "bphelper-cli"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "045f812755e17661d1aa5ffbbb844de19be40b1a87e8a7454a600489e0c10dc2"
+dependencies = [
+ "anyhow",
+ "bphelper-manifest 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "cargo-generate",
  "cargo_metadata",
  "clap",
@@ -201,6 +239,16 @@ name = "bphelper-manifest"
 version = "0.4.1"
 dependencies = [
  "expect-test",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "bphelper-manifest"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d147d91555e8867e3be8c1b7d7422cfd28a7303312819e858f1fa8e59ace9c2"
+dependencies = [
  "serde",
  "toml",
 ]
@@ -739,10 +787,10 @@ dependencies = [
 
 [[package]]
 name = "error-battery-pack"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
- "battery-pack",
+ "battery-pack 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 2.0.18",
 ]
 
