@@ -350,7 +350,7 @@ pub struct ExampleInfo {
 // ============================================================================
 
 // [impl cli.new.template]
-// [impl cli.new.path]
+// [impl cli.path.flag]
 fn new_from_battery_pack(
     battery_pack: &str,
     name: Option<String>,
@@ -400,7 +400,8 @@ fn add_battery_pack(
     // Step 1: Read the battery pack spec WITHOUT modifying any manifests.
     // For registry deps: download from crates.io and parse directly.
     // For path deps: read the Cargo.toml from the local path.
-    // [impl cli.add.path]
+    // [impl cli.path.flag]
+    // [impl cli.path.no-resolve]
     let (bp_version, bp_spec) = if let Some(local_path) = path {
         let manifest_path = Path::new(local_path).join("Cargo.toml");
         let manifest_content = std::fs::read_to_string(&manifest_path)
@@ -1447,7 +1448,7 @@ pub struct InstalledPack {
 ///
 /// Reads `[build-dependencies]` from the user's Cargo.toml, fetches each
 /// battery pack's spec via cargo metadata, and reads active features from
-/// `[package.metadata.battery-pack]`.
+/// `package.metadata.battery-pack`.
 pub fn load_installed_packs() -> Result<Vec<InstalledPack>> {
     let user_manifest_path = find_user_manifest()?;
     let user_manifest_content =
@@ -1937,7 +1938,7 @@ fn find_template_path(tree: &[String], template_path: &str) -> Option<String> {
 // ============================================================================
 
 // [impl cli.validate.purpose]
-// [impl cli.validate.path]
+// [impl cli.validate.default-path]
 pub fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
     let crate_root = match path {
         Some(p) => std::path::PathBuf::from(p),

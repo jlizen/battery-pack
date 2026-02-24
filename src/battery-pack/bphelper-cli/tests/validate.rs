@@ -70,7 +70,7 @@ fn validate_nonexistent_path_fails() {
     assert!(result.is_err(), "nonexistent path should fail");
 }
 
-// [verify cli.validate.path]
+// [verify cli.validate.default-path]
 #[test]
 fn validate_uses_path_argument() {
     // Verify --path correctly targets a specific directory rather than cwd
