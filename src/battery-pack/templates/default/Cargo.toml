@@ -8,7 +8,7 @@ readme = "README.md"
 keywords = ["battery-pack"]
 
 [dependencies]
-battery-pack = "0.3"
+battery-pack = "0.4"
 
 [dev-dependencies]
 # Add your curated dependencies here:
