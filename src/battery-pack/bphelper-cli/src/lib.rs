@@ -194,7 +194,7 @@ pub fn main() -> Result<()> {
                     name,
                     template,
                     path,
-                } => new_from_battery_pack(&battery_pack, name, template, path),
+                } => new_from_battery_pack(&battery_pack, name, template, path, &source),
                 BpCommands::Add {
                     battery_pack,
                     crates,
@@ -212,6 +212,7 @@ pub fn main() -> Result<()> {
                         &crates,
                         target,
                         path.as_deref(),
+                        &source,
                         &project_dir,
                     ),
                     // [impl cli.bare.tui]
@@ -249,9 +250,9 @@ pub fn main() -> Result<()> {
                     // [impl cli.show.interactive]
                     // [impl cli.show.non-interactive]
                     if !non_interactive && std::io::stdout().is_terminal() {
-                        tui::run_show(&battery_pack, path.as_deref())
+                        tui::run_show(&battery_pack, path.as_deref(), source)
                     } else {
-                        print_battery_pack_detail(&battery_pack, path.as_deref())
+                        print_battery_pack_detail(&battery_pack, path.as_deref(), &source)
                     }
                 }
                 BpCommands::Validate { path } => validate_battery_pack_cmd(path.as_deref()),
@@ -392,30 +393,40 @@ pub struct ExampleInfo {
 // [impl cli.new.name-flag]
 // [impl cli.new.name-prompt]
 // [impl cli.path.flag]
+// [impl cli.source.replace]
 fn new_from_battery_pack(
     battery_pack: &str,
     name: Option<String>,
     template: Option<String>,
     path_override: Option<String>,
+    source: &CrateSource,
 ) -> Result<()> {
-    // If using local path, generate directly from there
+    // --path takes precedence over --crate-source
     if let Some(path) = path_override {
         return generate_from_local(&path, name, template);
     }
 
-    // Resolve the crate name (add -battery-pack suffix if needed)
     let crate_name = resolve_crate_name(battery_pack);
 
-    // Look up the crate on crates.io and get the latest version
-    let crate_info = lookup_crate(&crate_name)?;
+    // Locate the crate directory based on source
+    let crate_dir: PathBuf;
+    let _temp_dir: Option<tempfile::TempDir>; // keep alive for Registry
+    match source {
+        CrateSource::Registry => {
+            let crate_info = lookup_crate(&crate_name)?;
+            let temp = download_and_extract_crate(&crate_name, &crate_info.version)?;
+            crate_dir = temp
+                .path()
+                .join(format!("{}-{}", crate_name, crate_info.version));
+            _temp_dir = Some(temp);
+        }
+        CrateSource::Local(workspace_dir) => {
+            crate_dir = find_local_battery_pack_dir(workspace_dir, &crate_name)?;
+            _temp_dir = None;
+        }
+    }
 
-    // Download and extract the crate to a temp directory
-    let temp_dir = download_and_extract_crate(&crate_name, &crate_info.version)?;
-    let crate_dir = temp_dir
-        .path()
-        .join(format!("{}-{}", crate_name, crate_info.version));
-
-    // Read template metadata from the extracted Cargo.toml
+    // Read template metadata from the Cargo.toml
     let manifest_path = crate_dir.join("Cargo.toml");
     let manifest_content = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
@@ -424,7 +435,7 @@ fn new_from_battery_pack(
     // Resolve which template to use
     let template_path = resolve_template(&templates, template.as_deref())?;
 
-    // Generate the project from the extracted crate
+    // Generate the project from the crate directory
     generate_from_path(&crate_dir, &template_path, name)
 }
 
@@ -537,15 +548,16 @@ pub fn add_battery_pack(
     specific_crates: &[String],
     target: Option<AddTarget>,
     path: Option<&str>,
+    source: &CrateSource,
     project_dir: &Path,
 ) -> Result<()> {
     let crate_name = resolve_crate_name(name);
 
     // Step 1: Read the battery pack spec WITHOUT modifying any manifests.
-    // For registry deps: download from crates.io and parse directly.
-    // For path deps: read the Cargo.toml from the local path.
+    // --path takes precedence over --crate-source.
     // [impl cli.path.flag]
     // [impl cli.path.no-resolve]
+    // [impl cli.source.replace]
     let (bp_version, bp_spec) = if let Some(local_path) = path {
         let manifest_path = Path::new(local_path).join("Cargo.toml");
         let manifest_content = std::fs::read_to_string(&manifest_path)
@@ -554,8 +566,7 @@ pub fn add_battery_pack(
             .map_err(|e| anyhow::anyhow!("Failed to parse battery pack '{}': {}", crate_name, e))?;
         (None, spec)
     } else {
-        let (version, spec) = fetch_bp_spec_from_registry(&crate_name)?;
-        (Some(version), spec)
+        fetch_bp_spec(source, name)?
     };
 
     // Step 2: Determine which crates to install — interactive picker, explicit flags, or defaults.
@@ -1973,6 +1984,77 @@ fn discover_local_battery_packs(
     Ok(battery_packs)
 }
 
+/// Find a specific battery pack's directory within a local workspace.
+fn find_local_battery_pack_dir(workspace_dir: &Path, crate_name: &str) -> Result<PathBuf> {
+    let manifest_path = workspace_dir.join("Cargo.toml");
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .manifest_path(&manifest_path)
+        .no_deps()
+        .exec()
+        .with_context(|| format!("Failed to read workspace at {}", manifest_path.display()))?;
+
+    let package = metadata
+        .packages
+        .iter()
+        .find(|p| p.name == crate_name)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Battery pack '{}' not found in workspace at {}",
+                crate_name,
+                workspace_dir.display()
+            )
+        })?;
+
+    Ok(package
+        .manifest_path
+        .parent()
+        .expect("manifest path should have a parent")
+        .into())
+}
+
+/// Fetch a battery pack's spec, dispatching based on source.
+///
+/// Returns `(version, spec)` — version is `None` for local sources.
+// [impl cli.source.replace]
+pub(crate) fn fetch_bp_spec(
+    source: &CrateSource,
+    name: &str,
+) -> Result<(Option<String>, bphelper_manifest::BatteryPackSpec)> {
+    let crate_name = resolve_crate_name(name);
+    match source {
+        CrateSource::Registry => {
+            let (version, spec) = fetch_bp_spec_from_registry(&crate_name)?;
+            Ok((Some(version), spec))
+        }
+        CrateSource::Local(workspace_dir) => {
+            let crate_dir = find_local_battery_pack_dir(workspace_dir, &crate_name)?;
+            let manifest_path = crate_dir.join("Cargo.toml");
+            let manifest_content = std::fs::read_to_string(&manifest_path)
+                .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+            let spec = bphelper_manifest::parse_battery_pack(&manifest_content).map_err(|e| {
+                anyhow::anyhow!("Failed to parse battery pack '{}': {}", crate_name, e)
+            })?;
+            Ok((None, spec))
+        }
+    }
+}
+
+/// Fetch detailed battery pack info, dispatching based on source.
+// [impl cli.source.replace]
+pub(crate) fn fetch_battery_pack_detail_from_source(
+    source: &CrateSource,
+    name: &str,
+) -> Result<BatteryPackDetail> {
+    match source {
+        CrateSource::Registry => fetch_battery_pack_detail(name, None),
+        CrateSource::Local(workspace_dir) => {
+            let crate_name = resolve_crate_name(name);
+            let crate_dir = find_local_battery_pack_dir(workspace_dir, &crate_name)?;
+            fetch_battery_pack_detail_from_path(&crate_dir.to_string_lossy())
+        }
+    }
+}
+
 fn print_battery_pack_list(source: &CrateSource, filter: Option<&str>) -> Result<()> {
     use console::style;
 
@@ -2145,10 +2227,16 @@ fn build_battery_pack_detail(
 
 // [impl cli.show.details]
 // [impl cli.show.hidden]
-fn print_battery_pack_detail(name: &str, path: Option<&str>) -> Result<()> {
+// [impl cli.source.replace]
+fn print_battery_pack_detail(name: &str, path: Option<&str>, source: &CrateSource) -> Result<()> {
     use console::style;
 
-    let detail = fetch_battery_pack_detail(name, path)?;
+    // --path takes precedence over --crate-source
+    let detail = if path.is_some() {
+        fetch_battery_pack_detail(name, path)?
+    } else {
+        fetch_battery_pack_detail_from_source(source, name)?
+    };
 
     // Header
     println!();

@@ -124,6 +124,7 @@ fn add(
         &specific,
         target,
         Some(fixture_path.to_str().unwrap()),
+        &bphelper_cli::CrateSource::Registry,
         project_dir,
     )
     .unwrap();

@@ -27,8 +27,8 @@ pub fn run_list(source: CrateSource, filter: Option<String>) -> Result<()> {
 }
 
 /// Run the TUI starting from the detail view
-pub fn run_show(name: &str, path: Option<&str>) -> Result<()> {
-    let app = App::new_show(name, path);
+pub fn run_show(name: &str, path: Option<&str>, source: CrateSource) -> Result<()> {
+    let app = App::new_show(name, path, source);
     app.run()
 }
 
@@ -550,9 +550,9 @@ impl App {
         }
     }
 
-    fn new_show(name: &str, path: Option<&str>) -> Self {
+    fn new_show(name: &str, path: Option<&str>, source: CrateSource) -> Self {
         Self {
-            source: CrateSource::Registry,
+            source,
             screen: Screen::Loading(LoadingState {
                 message: format!("Loading {}...", name),
                 target: LoadingTarget::Detail {
@@ -642,7 +642,12 @@ impl App {
                 path,
                 came_from_list,
             } => {
-                let detail = fetch_battery_pack_detail(&name, path.as_deref())?;
+                // --path takes precedence over --crate-source
+                let detail = if path.is_some() {
+                    fetch_battery_pack_detail(&name, path.as_deref())?
+                } else {
+                    crate::fetch_battery_pack_detail_from_source(&self.source, &name)?
+                };
                 let initial_index = detail.crates.len()
                     + detail.extends.len()
                     + detail.templates.len()
@@ -689,7 +694,7 @@ impl App {
                 bp_name,
                 bp_short_name,
             } => {
-                let (_version, spec) = crate::fetch_bp_spec_from_registry(&bp_name)?;
+                let (_version, spec) = crate::fetch_bp_spec(&self.source, &bp_name)?;
                 let summary = BatteryPackSummary {
                     name: bp_name,
                     short_name: bp_short_name,
