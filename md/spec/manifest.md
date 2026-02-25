@@ -36,19 +36,14 @@ take precedence for that crate.
 
 r[manifest.features.storage]
 The active features for a battery pack MUST be stored alongside
-the registration. The format is:
+the registration in one of two forms:
 
-```toml
-[package.metadata.battery-pack]
-cli-battery-pack = { version = "0.3.0", features = ["default", "indicators"] }
-```
+- Full form: `cli-battery-pack = { features = ["default", "indicators"] }`
+- Short form (when only the default feature is active): `cli-battery-pack = "0.3.0"`
 
-r[manifest.features.default-implicit]
-If no `features` key is present, the `default` feature is implicitly active.
-
-r[manifest.features.short-form]
-When only the default feature is active, the registration MAY use
-the short form (just a version string) instead of a table.
+The short form is equivalent to `{ features = ["default"] }`.
+When the `features` key is absent, the `default` feature is
+implicitly active.
 
 ## Dependency management
 
@@ -103,21 +98,16 @@ dependency kinds, `cargo bp` MUST resolve as follows:
 ## Sync behavior
 
 r[manifest.sync.version-bump]
-During sync, if a dependency's version is older than what the
-battery pack recommends, `cargo bp` MUST update it to the
-recommended version.
+During sync, `cargo bp` MUST update a dependency's version to the
+battery pack's recommended version only when the user's version is
+older. If the user's version is equal to or newer than the
+recommended version, it MUST be left unchanged.
 
 r[manifest.sync.feature-add]
-During sync, if a dependency is missing Cargo features that the
-battery pack specifies, `cargo bp` MUST add them.
-
-r[manifest.sync.no-downgrade]
-`cargo bp` MUST NOT downgrade a dependency version during sync.
-If the user has a newer version, it is left unchanged.
-
-r[manifest.sync.no-feature-remove]
-`cargo bp` MUST NOT remove Cargo features from a dependency
-during sync. User-added features are preserved.
+During sync, `cargo bp` MUST add any Cargo features that the
+battery pack specifies but that are missing from the user's
+dependency entry. Existing user features MUST be preserved —
+sync MUST NOT remove Cargo features.
 
 ## TOML formatting
 

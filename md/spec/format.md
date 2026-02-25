@@ -59,10 +59,8 @@ enable that dependency, which Cargo only allows for optional deps.
 
 r[format.features.default]
 The `default` feature determines which crates are installed when
-a user runs `cargo bp add <pack>` without additional flags.
-
-r[format.features.no-default]
-If no `default` feature is defined, all non-optional crates are
+a user runs `cargo bp add <pack>` without additional flags. If no
+`default` feature is defined, all non-optional crates are
 considered part of the default set.
 
 r[format.features.optional]

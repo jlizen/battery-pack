@@ -280,7 +280,6 @@ impl BatteryPackSpec {
 
     /// Add the default set of crates to the result map.
     // [impl format.features.default]
-    // [impl format.features.no-default]
     fn add_default_crates(&self, result: &mut BTreeMap<String, CrateSpec>) {
         if let Some(default_crate_names) = self.features.get("default") {
             // Explicit default feature exists — use it
@@ -365,11 +364,14 @@ impl BatteryPackSpec {
             .collect()
     }
 
-    /// Return all crates grouped by feature, with a flag indicating whether
-    /// each crate is in the default set.
+    /// Return all visible (non-hidden) crates grouped by feature, with a flag
+    /// indicating whether each crate is in the default set.
     ///
     /// Returns `Vec<(group_name, crate_name, &CrateSpec, is_default)>`.
     /// Crates not in any feature are grouped under `"default"`.
+    // [impl format.hidden.effect]
+    // [impl tui.installed.hidden]
+    // [impl tui.browse.hidden]
     pub fn all_crates_with_grouping(&self) -> Vec<(String, String, &CrateSpec, bool)> {
         let default_crates = self.resolve_crates(&[]);
         let mut result = Vec::new();
@@ -378,6 +380,9 @@ impl BatteryPackSpec {
         // First, emit crates grouped by features
         for (feature_name, crate_names) in &self.features {
             for crate_name in crate_names {
+                if self.is_hidden(crate_name) {
+                    continue;
+                }
                 if let Some(spec) = self.crates.get(crate_name) {
                     if seen.insert(crate_name.clone()) {
                         let is_default = default_crates.contains_key(crate_name);
@@ -389,6 +394,9 @@ impl BatteryPackSpec {
 
         // Then, emit any crates not covered by a feature (grouped as "default")
         for (crate_name, spec) in &self.crates {
+            if self.is_hidden(crate_name) {
+                continue;
+            }
             if seen.insert(crate_name.clone()) {
                 let is_default = default_crates.contains_key(crate_name);
                 result.push(("default".to_string(), crate_name.clone(), spec, is_default));
@@ -1218,7 +1226,7 @@ mod tests {
     }
 
     #[test]
-    // [verify format.features.no-default]
+    // [verify format.features.default]
     fn resolve_no_default_feature() {
         let manifest = r#"
             [package]
@@ -1446,6 +1454,37 @@ mod tests {
         assert!(visible.contains_key("anyhow"));
         assert!(!visible.contains_key("serde"));
         assert!(!visible.contains_key("serde_json"));
+    }
+
+    // [verify tui.installed.hidden]
+    // [verify tui.browse.hidden]
+    #[test]
+    fn all_crates_with_grouping_filters_hidden() {
+        let manifest = r#"
+            [package]
+            name = "test-battery-pack"
+            version = "0.1.0"
+
+            [dependencies]
+            serde = "1"
+            serde_json = "1"
+            clap = "4"
+            anyhow = "1"
+
+            [package.metadata.battery-pack]
+            hidden = ["serde*"]
+        "#;
+
+        let spec = parse_battery_pack(manifest).unwrap();
+        let grouped = spec.all_crates_with_grouping();
+        let names: Vec<&str> = grouped.iter().map(|(_, n, _, _)| n.as_str()).collect();
+        assert!(names.contains(&"clap"));
+        assert!(names.contains(&"anyhow"));
+        assert!(!names.contains(&"serde"), "hidden crate must be excluded");
+        assert!(
+            !names.contains(&"serde_json"),
+            "hidden crate must be excluded"
+        );
     }
 
     // -- Glob matching unit tests --

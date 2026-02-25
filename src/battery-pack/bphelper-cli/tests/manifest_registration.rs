@@ -88,10 +88,10 @@ basic-battery-pack = { version = "0.1.0", features = ["default"] }
 }
 
 // ============================================================================
-// manifest.features.default-implicit — without features key, default is active
+// manifest.features.storage — without features key, default is active
 // ============================================================================
 
-// [verify manifest.features.default-implicit]
+// [verify manifest.features.storage]
 #[test]
 fn features_default_implicit_when_no_features_key() {
     // When there is no features key at all, default is implicitly active
@@ -108,7 +108,7 @@ basic-battery-pack = "0.1.0"
     assert_eq!(features, BTreeSet::from(["default".to_string()]));
 }
 
-// [verify manifest.features.default-implicit]
+// [verify manifest.features.storage]
 #[test]
 fn features_default_implicit_when_no_metadata() {
     // When there is no metadata at all, default is implicitly active
@@ -122,7 +122,7 @@ version = "0.1.0"
     assert_eq!(features, BTreeSet::from(["default".to_string()]));
 }
 
-// [verify manifest.features.default-implicit]
+// [verify manifest.features.storage]
 #[test]
 fn features_default_implicit_when_bp_not_registered() {
     // When the battery pack is not in metadata, default is implicitly active
@@ -140,10 +140,10 @@ other-battery-pack = "0.2.0"
 }
 
 // ============================================================================
-// manifest.features.short-form — only default feature may use short form
+// manifest.features.storage — only default feature may use short form
 // ============================================================================
 
-// [verify manifest.features.short-form]
+// [verify manifest.features.storage]
 #[test]
 fn features_short_form_is_version_string() {
     // Short form: just a version string means only default feature is active

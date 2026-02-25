@@ -3,10 +3,8 @@
 //! These tests exercise `sync_dep_in_table` directly on `toml_edit::Table`
 //! values, verifying the four sync invariants:
 //!
-//!   - version-bump:      older version is upgraded
-//!   - feature-add:       missing features are added
-//!   - no-downgrade:      newer user version is left alone
-//!   - no-feature-remove: user-added features are preserved
+//!   - version-bump: older version is upgraded (newer left alone)
+//!   - feature-add:  missing features are added (existing preserved)
 
 use bphelper_manifest::{CrateSpec, DepKind};
 use toml_edit::DocumentMut;
@@ -40,6 +38,12 @@ fn read_version(doc: &DocumentMut, dep_name: &str) -> String {
             .and_then(|v| v.as_str())
             .expect("version key")
             .to_string(),
+        toml_edit::Item::Table(t) => t
+            .get("version")
+            .and_then(|v| v.as_value())
+            .and_then(|v| v.as_str())
+            .expect("version key")
+            .to_string(),
         other => panic!("unexpected dep format: {:?}", other),
     }
 }
@@ -47,15 +51,22 @@ fn read_version(doc: &DocumentMut, dep_name: &str) -> String {
 /// Read the features array for `dep_name` from the dependencies table.
 fn read_features(doc: &DocumentMut, dep_name: &str) -> Vec<String> {
     let deps = doc["dependencies"].as_table().expect("dependencies table");
+    let extract = |arr: &toml_edit::Array| -> Vec<String> {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    };
     match deps.get(dep_name).expect("dep exists") {
         toml_edit::Item::Value(toml_edit::Value::InlineTable(t)) => t
             .get("features")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
+            .map(|arr| extract(arr))
+            .unwrap_or_default(),
+        toml_edit::Item::Table(t) => t
+            .get("features")
+            .and_then(|v| v.as_value())
+            .and_then(|v| v.as_array())
+            .map(|arr| extract(arr))
             .unwrap_or_default(),
         toml_edit::Item::Value(toml_edit::Value::String(_)) => vec![],
         other => panic!("unexpected dep format: {:?}", other),
@@ -181,10 +192,10 @@ serde = { version = "1.0", features = ["derive"] }
 }
 
 // ---------------------------------------------------------------------------
-// manifest.sync.no-downgrade
+// manifest.sync.version-bump — must not downgrade
 // ---------------------------------------------------------------------------
 
-// [verify manifest.sync.no-downgrade]
+// [verify manifest.sync.version-bump]
 #[test]
 fn no_downgrade_simple_string() {
     let mut doc = parse_deps(
@@ -203,7 +214,7 @@ serde = "2.0"
     );
 }
 
-// [verify manifest.sync.no-downgrade]
+// [verify manifest.sync.version-bump]
 #[test]
 fn no_downgrade_inline_table() {
     let mut doc = parse_deps(
@@ -222,7 +233,7 @@ serde = { version = "2.0", features = ["derive"] }
     );
 }
 
-// [verify manifest.sync.no-downgrade]
+// [verify manifest.sync.version-bump]
 #[test]
 fn no_downgrade_full_semver() {
     let mut doc = parse_deps(
@@ -241,7 +252,7 @@ tokio = { version = "1.40.0", features = ["full"] }
     );
 }
 
-// [verify manifest.sync.no-downgrade]
+// [verify manifest.sync.version-bump]
 #[test]
 fn no_downgrade_when_adding_features() {
     // User has a newer version but battery pack recommends an older one with
@@ -269,10 +280,10 @@ serde = "2.0"
 }
 
 // ---------------------------------------------------------------------------
-// manifest.sync.no-feature-remove
+// manifest.sync.feature-add — must not remove features
 // ---------------------------------------------------------------------------
 
-// [verify manifest.sync.no-feature-remove]
+// [verify manifest.sync.feature-add]
 #[test]
 fn no_feature_remove_preserves_user_features() {
     let mut doc = parse_deps(
@@ -299,7 +310,7 @@ serde = { version = "1.0", features = ["derive", "custom-user-feature"] }
     );
 }
 
-// [verify manifest.sync.no-feature-remove]
+// [verify manifest.sync.feature-add]
 #[test]
 fn no_feature_remove_when_adding_new_features() {
     let mut doc = parse_deps(
@@ -335,7 +346,6 @@ serde = { version = "1.0", features = ["derive", "custom-user-feature"] }
 
 // [verify manifest.sync.version-bump]
 // [verify manifest.sync.feature-add]
-// [verify manifest.sync.no-feature-remove]
 #[test]
 fn version_bump_and_feature_add_preserves_user_features() {
     let mut doc = parse_deps(
@@ -355,4 +365,78 @@ serde = { version = "1.0", features = ["derive", "my-extra"] }
         "user feature preserved"
     );
     assert!(features.contains(&"rc".to_string()), "new bp feature added");
+}
+
+// ---------------------------------------------------------------------------
+// Multi-line `dependencies.name` table format
+// ---------------------------------------------------------------------------
+
+// [verify manifest.sync.version-bump]
+#[test]
+fn version_bump_full_table() {
+    let mut doc = parse_deps(
+        r#"
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+"#,
+    );
+    let table = doc["dependencies"].as_table_mut().unwrap();
+    let changed = bphelper_cli::sync_dep_in_table(table, "serde", &spec("1.5", &["derive"]));
+    assert!(changed, "version should bump");
+    assert_eq!(read_version(&doc, "serde"), "1.5");
+}
+
+// [verify manifest.sync.version-bump]
+#[test]
+fn no_downgrade_full_table() {
+    let mut doc = parse_deps(
+        r#"
+[dependencies.serde]
+version = "2.0"
+features = ["derive"]
+"#,
+    );
+    let table = doc["dependencies"].as_table_mut().unwrap();
+    let changed = bphelper_cli::sync_dep_in_table(table, "serde", &spec("1.5", &["derive"]));
+    assert!(!changed, "sync must not downgrade");
+    assert_eq!(read_version(&doc, "serde"), "2.0");
+}
+
+// [verify manifest.sync.feature-add]
+#[test]
+fn feature_add_full_table() {
+    let mut doc = parse_deps(
+        r#"
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+"#,
+    );
+    let table = doc["dependencies"].as_table_mut().unwrap();
+    let changed = bphelper_cli::sync_dep_in_table(table, "serde", &spec("1.0", &["derive", "rc"]));
+    assert!(changed, "feature 'rc' should be added");
+    let features = read_features(&doc, "serde");
+    assert!(features.contains(&"derive".to_string()));
+    assert!(features.contains(&"rc".to_string()));
+}
+
+// [verify manifest.sync.feature-add]
+#[test]
+fn no_feature_remove_full_table() {
+    let mut doc = parse_deps(
+        r#"
+[dependencies.serde]
+version = "1.0"
+features = ["derive", "custom-user-feature"]
+"#,
+    );
+    let table = doc["dependencies"].as_table_mut().unwrap();
+    let changed = bphelper_cli::sync_dep_in_table(table, "serde", &spec("1.0", &["derive"]));
+    assert!(!changed, "no new features to add");
+    let features = read_features(&doc, "serde");
+    assert!(
+        features.contains(&"custom-user-feature".to_string()),
+        "user feature must be preserved"
+    );
 }

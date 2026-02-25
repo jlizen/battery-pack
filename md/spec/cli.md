@@ -63,11 +63,11 @@ it MUST be used as-is without further modification.
 ## `cargo bp` (no arguments)
 
 r[cli.bare.tui]
-Running `cargo bp` with no subcommand MUST launch the interactive TUI.
+Running `cargo bp` with no subcommand and no flags MUST launch
+the interactive TUI.
 
 r[cli.bare.help]
-Running `cargo bp --help` MUST print CLI help text and exit
-(not launch the TUI).
+Running `cargo bp --help` MUST print CLI help text and exit.
 
 ## `cargo bp add`
 
@@ -83,15 +83,17 @@ battery pack's `default` feature (or all non-optional crates if no
 
 r[cli.add.features]
 `cargo bp add <pack> -F <name>` (or `--features <name>`) MUST add
-the default crates plus all crates from the named feature.
+all crates from the named feature. Unless `--no-default-features`
+is specified, the default crates are also included.
 
 r[cli.add.features-multiple]
 Multiple features MAY be specified as a comma-separated list
 (`-F indicators,fancy`) or by repeating the flag (`-F indicators -F fancy`).
 
 r[cli.add.no-default-features]
-`cargo bp add <pack> --no-default-features` MUST skip the default crates.
-Combined with `-F`, it adds only the named feature's crates.
+`cargo bp add <pack> --no-default-features` MUST add no crates
+by itself. Combined with `-F`, it adds only the named feature's
+crates.
 
 r[cli.add.all-features]
 `cargo bp add <pack> --all-features` MUST add every crate the battery pack
@@ -155,13 +157,10 @@ r[cli.status.list]
 registered versions.
 
 r[cli.status.version-warn]
-For each installed battery pack, if any of the user's dependency
-versions are older than what the battery pack recommends,
-`cargo bp status` MUST display a warning.
-
-r[cli.status.newer-ok]
-If the user has a newer version of a crate than the battery pack
-recommends, `cargo bp status` MUST NOT warn. Newer is acceptable.
+For each installed battery pack, `cargo bp status` MUST display
+a warning for each dependency whose version is older than what
+the battery pack recommends. Dependencies with equal or newer
+versions MUST NOT produce a warning.
 
 r[cli.status.no-project]
 If run outside a Rust project, `cargo bp status` MUST report
@@ -171,19 +170,18 @@ that no project was found.
 
 r[cli.sync.update-versions]
 `cargo bp sync` MUST update dependency versions that are older
-than what the installed battery packs recommend.
+than what the installed battery packs recommend. Versions that
+are equal to or newer than recommended MUST be left unchanged.
 
 r[cli.sync.add-features]
 `cargo bp sync` MUST add any Cargo features that the battery pack
 specifies but are missing from the user's dependency entry.
+Existing user-added features MUST be preserved.
 
 r[cli.sync.add-crates]
 `cargo bp sync` MUST add any crates that belong to the user's
 active features but are missing from the user's dependencies.
-
-r[cli.sync.non-destructive]
-`cargo bp sync` MUST NOT remove crates or downgrade versions.
-It only adds and upgrades.
+Existing crates MUST NOT be removed.
 
 ## `cargo bp list`
 

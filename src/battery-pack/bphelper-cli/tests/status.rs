@@ -2,8 +2,7 @@
 //!
 //! Covers:
 //!   - cli.status.list         — lists installed battery packs with versions
-//!   - cli.status.version-warn — warns when user versions are older than recommended
-//!   - cli.status.newer-ok     — no warning when user has newer versions
+//!   - cli.status.version-warn — warns when user versions are older; no warning when newer
 //!   - cli.status.no-project   — reports error outside a Rust project
 
 use std::collections::BTreeMap;
@@ -104,7 +103,6 @@ serde = "1.0"
     assert_eq!(versions.get("serde").unwrap(), "1.0");
 }
 
-// [verify cli.status.newer-ok]
 // [verify cli.status.version-warn]
 #[test]
 fn should_upgrade_detects_older_version() {
