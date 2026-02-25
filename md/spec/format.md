@@ -51,6 +51,12 @@ r[format.features.grouping]
 Cargo `[features]` in the battery pack define named groups of crates.
 Each feature lists the crate names it includes.
 
+r[format.features.optional-required]
+Any dependency listed in a `[features]` entry MUST be declared with
+`optional = true` in its dependency section. This is a Cargo
+requirement: feature names that match dependency names implicitly
+enable that dependency, which Cargo only allows for optional deps.
+
 r[format.features.default]
 The `default` feature determines which crates are installed when
 a user runs `cargo bp add <pack>` without additional flags.

@@ -2,42 +2,41 @@
 
 This section specifies the behavior of each `cargo bp` subcommand.
 
-## Local sources
+## Crate sources
 
 r[cli.source.flag]
-`cargo bp --source <path>` MUST add a local workspace as a
-battery pack source. The `<path>` MUST point to a directory
-containing a `Cargo.toml` with `[workspace]`.
+`cargo bp --crate-source <path>` MUST use a local workspace as
+the battery pack source, replacing crates.io. The `<path>` MUST
+point to a directory containing a `Cargo.toml` with `[workspace]`.
 
 r[cli.source.discover]
-When a local source is specified, `cargo bp` MUST scan the
+When a crate source is specified, `cargo bp` MUST scan the
 workspace members for crates whose names end in `-battery-pack`
 and make them available as battery packs.
 
-r[cli.source.precedence]
-Local sources MUST take precedence over crates.io. If a battery
-pack exists in both a local source and crates.io, the local
-version MUST be used.
+r[cli.source.replace]
+When `--crate-source` is specified, it MUST fully replace
+crates.io. No network requests to crates.io are made.
 
 r[cli.source.multiple]
-The `--source` flag MAY be specified multiple times to add
+The `--crate-source` flag MAY be specified multiple times to add
 multiple local workspaces.
 
 r[cli.source.subcommands]
-The `--source` flag MUST be accepted by all subcommands that
+The `--crate-source` flag MUST be accepted by all subcommands that
 resolve battery packs: `add`, `new`, `show`, `list`, `status`,
 and `sync`, as well as the bare `cargo bp` TUI.
 
 r[cli.source.scope]
-The `--source` flag is a per-invocation option that adds
-additional directories to the set of places `cargo bp` searches
-for battery packs. It does not persist across invocations.
+The `--crate-source` flag is a per-invocation option that
+replaces the default crates.io source with local directories.
+It does not persist across invocations.
 
 ## Path flag
 
 r[cli.path.flag]
 `cargo bp --path <path>` MUST read a battery pack from the
-given directory. Unlike `--source`, which adds a searchable
+given directory. Unlike `--crate-source`, which adds a searchable
 workspace, `--path` identifies a single battery pack directory
 directly.
 
