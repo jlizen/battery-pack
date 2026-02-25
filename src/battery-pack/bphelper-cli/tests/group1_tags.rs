@@ -7,7 +7,7 @@
 //!   - cli.new.template-select — multiple templates with no default triggers prompt path
 //!   - cli.add.idempotent     — re-adding same dep doesn't create duplicates
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 // ============================================================================
 // cli.new.name-flag — --name flag is accepted by the `new` subcommand
@@ -189,7 +189,7 @@ fn add_dep_twice_no_duplicate() {
     let mut table = toml_edit::Table::new();
     let spec = bphelper_manifest::CrateSpec {
         version: "1.0".to_string(),
-        features: vec![],
+        features: BTreeSet::new(),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -200,7 +200,7 @@ fn add_dep_twice_no_duplicate() {
     // Add again with updated version
     let spec_v2 = bphelper_manifest::CrateSpec {
         version: "2.0".to_string(),
-        features: vec![],
+        features: BTreeSet::new(),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -221,7 +221,7 @@ fn add_dep_twice_with_features_no_duplicate() {
     let mut table = toml_edit::Table::new();
     let spec1 = bphelper_manifest::CrateSpec {
         version: "4".to_string(),
-        features: vec!["derive".to_string()],
+        features: BTreeSet::from(["derive".to_string()]),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -231,7 +231,7 @@ fn add_dep_twice_with_features_no_duplicate() {
 
     let spec2 = bphelper_manifest::CrateSpec {
         version: "4.1".to_string(),
-        features: vec!["derive".to_string(), "env".to_string()],
+        features: BTreeSet::from(["derive".to_string(), "env".to_string()]),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -279,5 +279,8 @@ features = ["default"]
 
     // Verify features were updated
     let features = bphelper_cli::read_active_features(&doc.to_string(), "cli-battery-pack");
-    assert_eq!(features, vec!["default", "indicators"]);
+    assert_eq!(
+        features,
+        BTreeSet::from(["default".to_string(), "indicators".to_string()])
+    );
 }

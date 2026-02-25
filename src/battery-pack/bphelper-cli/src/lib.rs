@@ -5,7 +5,7 @@ use cargo_generate::{GenerateArgs, TemplatePath, Vcs};
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tar::Archive;
@@ -457,7 +457,7 @@ fn new_from_battery_pack(
 pub enum ResolvedAdd {
     /// Resolved to a concrete set of crates (no interactive picker needed).
     Crates {
-        active_features: Vec<String>,
+        active_features: BTreeSet<String>,
         crates: BTreeMap<String, bphelper_manifest::CrateSpec>,
     },
     /// The caller should show the interactive picker.
@@ -500,15 +500,16 @@ pub fn resolve_add_crates(
             }
         }
         return ResolvedAdd::Crates {
-            active_features: vec![],
+            active_features: BTreeSet::new(),
             crates: selected,
         };
     }
 
     if all_features {
+        // [impl format.hidden.effect]
         return ResolvedAdd::Crates {
-            active_features: vec!["all".to_string()],
-            crates: bp_spec.resolve_all(),
+            active_features: BTreeSet::from(["all".to_string()]),
+            crates: bp_spec.resolve_all_visible(),
         };
     }
 
@@ -519,10 +520,10 @@ pub fn resolve_add_crates(
         return ResolvedAdd::Interactive;
     }
 
-    let mut features = if no_default_features {
-        vec![]
+    let mut features: BTreeSet<String> = if no_default_features {
+        BTreeSet::new()
     } else {
-        vec!["default".to_string()]
+        BTreeSet::from(["default".to_string()])
     };
     features.extend(with_features.iter().cloned());
 
@@ -609,7 +610,7 @@ pub fn add_battery_pack(
         ResolvedAdd::Interactive => {
             // Non-interactive fallback: use defaults
             let crates = bp_spec.resolve_crates(&["default"]);
-            (vec!["default".to_string()], crates)
+            (BTreeSet::from(["default".to_string()]), crates)
         }
     };
 
@@ -686,27 +687,12 @@ pub fn add_battery_pack(
         std::fs::write(ws_path, ws_doc.to_string())
             .context("Failed to write workspace Cargo.toml")?;
 
-        let deps =
-            user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        if let Some(table) = deps.as_table_mut() {
-            for dep_name in crates_to_sync.keys() {
-                let mut dep = toml_edit::InlineTable::new();
-                dep.insert("workspace", toml_edit::Value::from(true));
-                table.insert(
-                    dep_name,
-                    toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
-                );
-            }
-        }
+        // [impl cli.add.dep-kind]
+        write_workspace_refs_by_kind(&mut user_doc, &crates_to_sync);
     } else {
         // [impl manifest.deps.no-workspace]
-        let deps =
-            user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        if let Some(table) = deps.as_table_mut() {
-            for (dep_name, dep_spec) in &crates_to_sync {
-                add_dep_to_table(table, dep_name, dep_spec);
-            }
-        }
+        // [impl cli.add.dep-kind]
+        write_deps_by_kind(&mut user_doc, &crates_to_sync);
     }
 
     // [impl manifest.register.location]
@@ -720,11 +706,6 @@ pub fn add_battery_pack(
         Some(AddTarget::Default) | None => workspace_manifest.is_some(),
     };
 
-    let mut features_array = toml_edit::Array::new();
-    for feature in &active_features {
-        features_array.push(feature.as_str());
-    }
-
     if use_workspace_metadata {
         if let Some(ref ws_path) = workspace_manifest {
             let ws_content =
@@ -732,22 +713,24 @@ pub fn add_battery_pack(
             let mut ws_doc: toml_edit::DocumentMut = ws_content
                 .parse()
                 .context("Failed to parse workspace Cargo.toml")?;
-            let bp_meta = &mut ws_doc["workspace"]["metadata"]["battery-pack"][&crate_name];
-            *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
-            bp_meta["features"] = toml_edit::value(features_array);
+            write_bp_features_to_doc(
+                &mut ws_doc,
+                &["workspace", "metadata"],
+                &crate_name,
+                &active_features,
+            );
             std::fs::write(ws_path, ws_doc.to_string())
                 .context("Failed to write workspace Cargo.toml")?;
         } else {
             bail!("--target=workspace requires a workspace, but none was found");
         }
     } else {
-        // Ensure each intermediate table exists as a proper table (not inline).
-        user_doc["package"]["metadata"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        user_doc["package"]["metadata"]["battery-pack"]
-            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&crate_name];
-        *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
-        bp_meta["features"] = toml_edit::value(features_array);
+        write_bp_features_to_doc(
+            &mut user_doc,
+            &["package", "metadata"],
+            &crate_name,
+            &active_features,
+        );
     }
 
     // Write the final Cargo.toml
@@ -796,17 +779,20 @@ fn sync_battery_packs(project_dir: &Path) -> Result<()> {
         .context("Failed to parse Cargo.toml")?;
 
     let workspace_manifest = find_workspace_manifest(&user_manifest_path)?;
+    let metadata_location = resolve_metadata_location(&user_manifest_path)?;
     let mut total_changes = 0;
 
     for bp_name in &bp_names {
         // Get the battery pack spec
         let bp_spec = fetch_battery_pack_spec(bp_name)?;
 
-        // Read active features from user metadata
-        let active_features = read_active_features(&user_manifest_content, bp_name);
+        // Read active features from the correct metadata location
+        let active_features =
+            read_active_features_from(&metadata_location, &user_manifest_content, bp_name);
 
+        // [impl format.hidden.effect]
         let expected = if active_features.iter().any(|s| s == "all") {
-            bp_spec.resolve_all()
+            bp_spec.resolve_all_visible()
         } else {
             let str_features: Vec<&str> = active_features.iter().map(|s| s.as_str()).collect();
             bp_spec.resolve_crates(&str_features)
@@ -836,11 +822,13 @@ fn sync_battery_packs(project_dir: &Path) -> Result<()> {
             std::fs::write(ws_path, ws_doc.to_string())
                 .context("Failed to write workspace Cargo.toml")?;
 
-            // Ensure crate-level references exist
-            let deps =
-                user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-            if let Some(table) = deps.as_table_mut() {
-                for dep_name in expected.keys() {
+            // Ensure crate-level references exist in the correct sections
+            // [impl cli.add.dep-kind]
+            for (dep_name, dep_spec) in &expected {
+                let section = dep_kind_section(dep_spec.dep_kind);
+                let table =
+                    user_doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                if let Some(table) = table.as_table_mut() {
                     if !table.contains_key(dep_name) {
                         let mut dep = toml_edit::InlineTable::new();
                         dep.insert("workspace", toml_edit::Value::from(true));
@@ -855,10 +843,12 @@ fn sync_battery_packs(project_dir: &Path) -> Result<()> {
             }
         } else {
             // [impl manifest.deps.no-workspace]
-            let deps =
-                user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-            if let Some(table) = deps.as_table_mut() {
-                for (dep_name, dep_spec) in &expected {
+            // [impl cli.add.dep-kind]
+            for (dep_name, dep_spec) in &expected {
+                let section = dep_kind_section(dep_spec.dep_kind);
+                let table =
+                    user_doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                if let Some(table) = table.as_table_mut() {
                     if !table.contains_key(dep_name) {
                         add_dep_to_table(table, dep_name, dep_spec);
                         total_changes += 1;
@@ -930,7 +920,9 @@ fn enable_feature(
     }
 
     // Add feature to active features
-    let mut active_features = read_active_features(&user_manifest_content, &bp_name);
+    let metadata_location = resolve_metadata_location(&user_manifest_path)?;
+    let mut active_features =
+        read_active_features_from(&metadata_location, &user_manifest_content, &bp_name);
     if active_features.contains(&feature_name.to_string()) {
         println!(
             "Feature '{}' is already active for {}.",
@@ -938,7 +930,7 @@ fn enable_feature(
         );
         return Ok(());
     }
-    active_features.push(feature_name.to_string());
+    active_features.insert(feature_name.to_string());
 
     // Resolve what this changes
     let str_features: Vec<&str> = active_features.iter().map(|s| s.as_str()).collect();
@@ -969,10 +961,12 @@ fn enable_feature(
         std::fs::write(ws_path, ws_doc.to_string())
             .context("Failed to write workspace Cargo.toml")?;
 
-        let deps =
-            user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        if let Some(table) = deps.as_table_mut() {
-            for dep_name in crates_to_sync.keys() {
+        // [impl cli.add.dep-kind]
+        for (dep_name, dep_spec) in &crates_to_sync {
+            let section = dep_kind_section(dep_spec.dep_kind);
+            let table =
+                user_doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            if let Some(table) = table.as_table_mut() {
                 if !table.contains_key(dep_name) {
                     let mut dep = toml_edit::InlineTable::new();
                     dep.insert("workspace", toml_edit::Value::from(true));
@@ -984,10 +978,12 @@ fn enable_feature(
             }
         }
     } else {
-        let deps =
-            user_doc["dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        if let Some(table) = deps.as_table_mut() {
-            for (dep_name, dep_spec) in &crates_to_sync {
+        // [impl cli.add.dep-kind]
+        for (dep_name, dep_spec) in &crates_to_sync {
+            let section = dep_kind_section(dep_spec.dep_kind);
+            let table =
+                user_doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            if let Some(table) = table.as_table_mut() {
                 if !table.contains_key(dep_name) {
                     add_dep_to_table(table, dep_name, dep_spec);
                 }
@@ -995,14 +991,32 @@ fn enable_feature(
         }
     }
 
-    // Update active features in metadata
-    let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&bp_name];
-    let mut features_array = toml_edit::Array::new();
-    for feature in &active_features {
-        features_array.push(feature.as_str());
+    // Update active features in the correct metadata location
+    match &metadata_location {
+        MetadataLocation::Workspace { ws_manifest_path } => {
+            let ws_content = std::fs::read_to_string(ws_manifest_path)
+                .context("Failed to read workspace Cargo.toml")?;
+            let mut ws_doc: toml_edit::DocumentMut = ws_content
+                .parse()
+                .context("Failed to parse workspace Cargo.toml")?;
+            write_bp_features_to_doc(
+                &mut ws_doc,
+                &["workspace", "metadata"],
+                &bp_name,
+                &active_features,
+            );
+            std::fs::write(ws_manifest_path, ws_doc.to_string())
+                .context("Failed to write workspace Cargo.toml")?;
+        }
+        MetadataLocation::Package => {
+            write_bp_features_to_doc(
+                &mut user_doc,
+                &["package", "metadata"],
+                &bp_name,
+                &active_features,
+            );
+        }
     }
-    *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
-    bp_meta["features"] = toml_edit::value(features_array);
 
     std::fs::write(&user_manifest_path, user_doc.to_string())
         .context("Failed to write Cargo.toml")?;
@@ -1020,7 +1034,7 @@ struct PickerResult {
     /// The resolved crates to install (name -> dep spec with merged features).
     crates: BTreeMap<String, bphelper_manifest::CrateSpec>,
     /// Which feature names are fully selected (for metadata recording).
-    active_features: Vec<String>,
+    active_features: BTreeSet<String>,
 }
 
 /// Show an interactive multi-select picker for choosing which crates to install.
@@ -1046,7 +1060,15 @@ fn pick_crates_interactive(
         let version_info = if dep.features.is_empty() {
             format!("({})", dep.version)
         } else {
-            format!("({}, features: {})", dep.version, dep.features.join(", "))
+            format!(
+                "({}, features: {})",
+                dep.version,
+                dep.features
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
         };
 
         let group_label = if group == "default" {
@@ -1096,14 +1118,14 @@ fn pick_crates_interactive(
     }
 
     // Determine which features are "fully selected" for metadata
-    let mut active_features = vec!["default".to_string()];
+    let mut active_features = BTreeSet::from(["default".to_string()]);
     for (feature_name, feature_crates) in &bp_spec.features {
         if feature_name == "default" {
             continue;
         }
         let all_selected = feature_crates.iter().all(|c| crates.contains_key(c));
         if all_selected {
-            active_features.push(feature_name.clone());
+            active_features.insert(feature_name.clone());
         }
     }
 
@@ -1181,6 +1203,54 @@ fn find_workspace_manifest(crate_manifest: &Path) -> Result<Option<std::path::Pa
     // Also check if the crate's own Cargo.toml has a [workspace] section
     // (single-crate workspace) — in that case we don't use workspace deps
     Ok(None)
+}
+
+/// Return the TOML section name for a dependency kind.
+fn dep_kind_section(kind: bphelper_manifest::DepKind) -> &'static str {
+    match kind {
+        bphelper_manifest::DepKind::Normal => "dependencies",
+        bphelper_manifest::DepKind::Dev => "dev-dependencies",
+        bphelper_manifest::DepKind::Build => "build-dependencies",
+    }
+}
+
+/// Write crates to the correct dependency sections based on their `dep_kind`.
+///
+/// Groups crates by kind and inserts each into the appropriate
+/// `[dependencies]`, `[dev-dependencies]`, or `[build-dependencies]` table.
+// [impl cli.add.dep-kind]
+fn write_deps_by_kind(
+    doc: &mut toml_edit::DocumentMut,
+    crates: &BTreeMap<String, bphelper_manifest::CrateSpec>,
+) {
+    for (dep_name, dep_spec) in crates {
+        let section = dep_kind_section(dep_spec.dep_kind);
+        let table = doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        if let Some(table) = table.as_table_mut() {
+            add_dep_to_table(table, dep_name, dep_spec);
+        }
+    }
+}
+
+/// Write workspace references (`{ workspace = true }`) to the correct
+/// dependency sections based on each crate's `dep_kind`.
+// [impl cli.add.dep-kind]
+fn write_workspace_refs_by_kind(
+    doc: &mut toml_edit::DocumentMut,
+    crates: &BTreeMap<String, bphelper_manifest::CrateSpec>,
+) {
+    for (dep_name, dep_spec) in crates {
+        let section = dep_kind_section(dep_spec.dep_kind);
+        let table = doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        if let Some(table) = table.as_table_mut() {
+            let mut dep = toml_edit::InlineTable::new();
+            dep.insert("workspace", toml_edit::Value::from(true));
+            table.insert(
+                dep_name,
+                toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+            );
+        }
+    }
 }
 
 /// Add a dependency to a toml_edit table (non-workspace mode).
@@ -1333,10 +1403,10 @@ pub fn sync_dep_in_table(
 /// Read active features for a battery pack from user's metadata.
 // [impl manifest.features.default-implicit]
 // [impl manifest.features.short-form]
-pub fn read_active_features(manifest_content: &str, bp_name: &str) -> Vec<String> {
+pub fn read_active_features(manifest_content: &str, bp_name: &str) -> BTreeSet<String> {
     let raw: toml::Value = match toml::from_str(manifest_content) {
         Ok(v) => v,
-        Err(_) => return vec!["default".to_string()],
+        Err(_) => return BTreeSet::from(["default".to_string()]),
     };
 
     raw.get("package")
@@ -1350,7 +1420,122 @@ pub fn read_active_features(manifest_content: &str, bp_name: &str) -> Vec<String
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         })
-        .unwrap_or_else(|| vec!["default".to_string()])
+        .unwrap_or_else(|| BTreeSet::from(["default".to_string()]))
+}
+
+// ============================================================================
+// Metadata location abstraction
+// ============================================================================
+
+/// Where battery-pack metadata (registrations, active features) is stored.
+///
+/// `add_battery_pack` writes to either `package.metadata` or `workspace.metadata`
+/// depending on the `--target` flag. All other commands (sync, enable, load) must
+/// read from the same location, so they use `resolve_metadata_location` to detect
+/// where metadata currently lives.
+#[derive(Debug, Clone)]
+enum MetadataLocation {
+    /// `[package.metadata.battery-pack]` in the user manifest.
+    Package,
+    /// `[workspace.metadata.battery-pack]` in the workspace manifest.
+    Workspace { ws_manifest_path: PathBuf },
+}
+
+/// Determine where battery-pack metadata lives for this project.
+///
+/// If a workspace manifest exists AND already contains
+/// `[workspace.metadata.battery-pack]`, returns `Workspace`.
+/// Otherwise returns `Package`.
+fn resolve_metadata_location(user_manifest_path: &Path) -> Result<MetadataLocation> {
+    if let Some(ws_path) = find_workspace_manifest(user_manifest_path)? {
+        let ws_content =
+            std::fs::read_to_string(&ws_path).context("Failed to read workspace Cargo.toml")?;
+        let raw: toml::Value =
+            toml::from_str(&ws_content).context("Failed to parse workspace Cargo.toml")?;
+        if raw
+            .get("workspace")
+            .and_then(|w| w.get("metadata"))
+            .and_then(|m| m.get("battery-pack"))
+            .is_some()
+        {
+            return Ok(MetadataLocation::Workspace {
+                ws_manifest_path: ws_path,
+            });
+        }
+    }
+    Ok(MetadataLocation::Package)
+}
+
+/// Read active features for a battery pack, respecting metadata location.
+///
+/// Dispatches to `read_active_features` (package) or `read_active_features_ws`
+/// (workspace) based on the resolved location.
+fn read_active_features_from(
+    location: &MetadataLocation,
+    user_manifest_content: &str,
+    bp_name: &str,
+) -> BTreeSet<String> {
+    match location {
+        MetadataLocation::Package => read_active_features(user_manifest_content, bp_name),
+        MetadataLocation::Workspace { ws_manifest_path } => {
+            let ws_content = match std::fs::read_to_string(ws_manifest_path) {
+                Ok(c) => c,
+                Err(_) => return BTreeSet::from(["default".to_string()]),
+            };
+            read_active_features_ws(&ws_content, bp_name)
+        }
+    }
+}
+
+/// Read active features from `workspace.metadata.battery-pack[bp_name].features`.
+///
+/// Mirrors `read_active_features` but looks in the workspace metadata table
+/// instead of the package metadata table.
+pub fn read_active_features_ws(ws_content: &str, bp_name: &str) -> BTreeSet<String> {
+    let raw: toml::Value = match toml::from_str(ws_content) {
+        Ok(v) => v,
+        Err(_) => return BTreeSet::from(["default".to_string()]),
+    };
+
+    raw.get("workspace")
+        .and_then(|w| w.get("metadata"))
+        .and_then(|m| m.get("battery-pack"))
+        .and_then(|bp| bp.get(bp_name))
+        .and_then(|entry| entry.get("features"))
+        .and_then(|sets| sets.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_else(|| BTreeSet::from(["default".to_string()]))
+}
+
+/// Write a features array into a `toml_edit::DocumentMut` at a given path prefix.
+///
+/// `path_prefix` is `["package", "metadata"]` for package metadata or
+/// `["workspace", "metadata"]` for workspace metadata.
+fn write_bp_features_to_doc(
+    doc: &mut toml_edit::DocumentMut,
+    path_prefix: &[&str],
+    bp_name: &str,
+    active_features: &BTreeSet<String>,
+) {
+    let mut features_array = toml_edit::Array::new();
+    for feature in active_features {
+        features_array.push(feature.as_str());
+    }
+
+    // Ensure intermediate tables exist (nested, not top-level)
+    // path_prefix is e.g. ["package", "metadata"] or ["workspace", "metadata"]
+    doc[path_prefix[0]].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    doc[path_prefix[0]][path_prefix[1]].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    doc[path_prefix[0]][path_prefix[1]]["battery-pack"]
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+
+    let bp_meta = &mut doc[path_prefix[0]][path_prefix[1]]["battery-pack"][bp_name];
+    *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
+    bp_meta["features"] = toml_edit::value(features_array);
 }
 
 /// Resolve the manifest path for a battery pack using `cargo metadata`.
@@ -1721,7 +1906,7 @@ pub struct InstalledPack {
     pub short_name: String,
     pub version: String,
     pub spec: bphelper_manifest::BatteryPackSpec,
-    pub active_features: Vec<String>,
+    pub active_features: BTreeSet<String>,
 }
 
 /// Load all installed battery packs with their specs and active features.
@@ -1735,11 +1920,13 @@ pub fn load_installed_packs(project_dir: &Path) -> Result<Vec<InstalledPack>> {
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
 
     let bp_names = find_installed_bp_names(&user_manifest_content)?;
+    let metadata_location = resolve_metadata_location(&user_manifest_path)?;
 
     let mut packs = Vec::new();
     for bp_name in bp_names {
         let spec = fetch_battery_pack_spec(&bp_name)?;
-        let active_features = read_active_features(&user_manifest_content, &bp_name);
+        let active_features =
+            read_active_features_from(&metadata_location, &user_manifest_content, &bp_name);
         packs.push(InstalledPack {
             short_name: short_name(&bp_name).to_string(),
             version: spec.version.clone(),

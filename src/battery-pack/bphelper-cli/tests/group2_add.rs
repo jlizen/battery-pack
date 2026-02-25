@@ -38,7 +38,7 @@ fn load_basic_spec() -> bphelper_manifest::BatteryPackSpec {
 }
 
 /// Extract crate names from a ResolvedAdd, panicking if Interactive.
-fn unwrap_resolved(resolved: bphelper_cli::ResolvedAdd) -> (Vec<String>, BTreeSet<String>) {
+fn unwrap_resolved(resolved: bphelper_cli::ResolvedAdd) -> (BTreeSet<String>, BTreeSet<String>) {
     match resolved {
         bphelper_cli::ResolvedAdd::Crates {
             active_features,
@@ -203,7 +203,10 @@ fn resolve_default_crates_fancy_via_named_feature() {
         bphelper_cli::resolve_add_crates(&spec, "fancy-battery-pack", &feat, false, false, &[]);
     let (features, crate_names) = unwrap_resolved(resolved);
 
-    assert_eq!(features, vec!["default", "indicators"]);
+    assert_eq!(
+        features,
+        BTreeSet::from(["default".to_string(), "indicators".to_string()])
+    );
     assert!(crate_names.contains("clap"), "default crate");
     assert!(crate_names.contains("dialoguer"), "default crate");
     assert!(crate_names.contains("indicatif"), "indicators crate");
@@ -235,7 +238,10 @@ fn resolve_with_named_feature_adds_to_defaults() {
     );
     let (features, crate_names) = unwrap_resolved(resolved);
 
-    assert_eq!(features, vec!["default", "indicators"]);
+    assert_eq!(
+        features,
+        BTreeSet::from(["default".to_string(), "indicators".to_string()])
+    );
     // Default crates
     assert!(crate_names.contains("clap"));
     assert!(crate_names.contains("dialoguer"));
@@ -261,7 +267,10 @@ fn resolve_with_all_errors_feature() {
     );
     let (features, crate_names) = unwrap_resolved(resolved);
 
-    assert_eq!(features, vec!["default", "all-errors"]);
+    assert_eq!(
+        features,
+        BTreeSet::from(["default".to_string(), "all-errors".to_string()])
+    );
     assert!(crate_names.contains("anyhow"));
     assert!(crate_names.contains("thiserror"));
     assert!(crate_names.contains("eyre"), "all-errors includes eyre");
@@ -300,7 +309,7 @@ fn resolve_no_default_features_with_named_feature() {
     );
     let (features, crate_names) = unwrap_resolved(resolved);
 
-    assert_eq!(features, vec!["indicators"]);
+    assert_eq!(features, BTreeSet::from(["indicators".to_string()]));
     assert!(crate_names.contains("indicatif"));
     assert!(crate_names.contains("console"));
     assert!(!crate_names.contains("clap"), "default crate excluded");
@@ -314,21 +323,26 @@ fn resolve_no_default_features_with_named_feature() {
 // [verify cli.add.all-features]
 #[test]
 fn resolve_all_features_fancy() {
-    // --all-features on fancy-battery-pack → all visible crates
+    // --all-features on fancy-battery-pack → all visible crates (hidden filtered out)
     let spec = load_fancy_spec();
     let resolved =
         bphelper_cli::resolve_add_crates(&spec, "fancy-battery-pack", &[], false, true, &[]);
     let (features, crate_names) = unwrap_resolved(resolved);
 
-    assert_eq!(features, vec!["all"]);
-    // All dependency-section crates (hidden crates are still resolved)
+    assert_eq!(features, BTreeSet::from(["all".to_string()]));
+    // Visible crates included
     assert!(crate_names.contains("clap"));
     assert!(crate_names.contains("dialoguer"));
     assert!(crate_names.contains("indicatif"));
     assert!(crate_names.contains("console"));
-    // Dev and build deps too
+    // Dev deps too
     assert!(crate_names.contains("assert_cmd"));
     assert!(crate_names.contains("predicates"));
+    // Hidden crates filtered out
+    // [verify format.hidden.effect]
+    assert!(!crate_names.contains("serde"), "serde is hidden");
+    assert!(!crate_names.contains("serde_json"), "serde_json is hidden");
+    assert!(!crate_names.contains("cc"), "cc is hidden");
 }
 
 // [verify cli.add.all-features]
@@ -340,7 +354,7 @@ fn resolve_all_features_basic() {
         bphelper_cli::resolve_add_crates(&spec, "basic-battery-pack", &[], false, true, &[]);
     let (features, crate_names) = unwrap_resolved(resolved);
 
-    assert_eq!(features, vec!["all"]);
+    assert_eq!(features, BTreeSet::from(["all".to_string()]));
     assert!(crate_names.contains("anyhow"));
     assert!(crate_names.contains("thiserror"));
     assert!(

@@ -433,8 +433,9 @@ fn build_installed_state(packs: Vec<InstalledPack>) -> InstalledState {
         .into_iter()
         .map(|pack| {
             let grouped = pack.spec.all_crates_with_grouping();
+            // [impl format.hidden.effect]
             let resolved = if pack.active_features.iter().any(|s| s == "all") {
-                pack.spec.resolve_all()
+                pack.spec.resolve_all_visible()
             } else {
                 let str_features: Vec<&str> =
                     pack.active_features.iter().map(|s| s.as_str()).collect();
@@ -448,7 +449,7 @@ fn build_installed_state(packs: Vec<InstalledPack>) -> InstalledState {
                     CrateEntry {
                         name: crate_name,
                         version: dep.version.clone(),
-                        features: dep.features.clone(),
+                        features: dep.features.iter().cloned().collect(),
                         group,
                         enabled: is_enabled,
                         originally_enabled: is_enabled,
@@ -482,7 +483,7 @@ fn build_expanded_pack(
         .map(|(group, crate_name, dep, is_default)| CrateEntry {
             name: crate_name,
             version: dep.version.clone(),
-            features: dep.features.clone(),
+            features: dep.features.iter().cloned().collect(),
             group,
             enabled: is_default,
             originally_enabled: false, // new pack, nothing was originally enabled

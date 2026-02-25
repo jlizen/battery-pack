@@ -5,7 +5,7 @@
 //! logic to determine which crates to install based on active features.
 
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 // ============================================================================
@@ -132,7 +132,7 @@ pub struct CrateSpec {
     /// Recommended version.
     pub version: String,
     /// Recommended Cargo features.
-    pub features: Vec<String>,
+    pub features: BTreeSet<String>,
     /// Which dependency section this crate comes from.
     pub dep_kind: DepKind,
     /// Whether this crate is marked `optional = true`.
@@ -168,10 +168,10 @@ pub struct BatteryPackSpec {
     pub crates: BTreeMap<String, CrateSpec>,
     /// Named features from `[features]`, mapping feature name to crate names.
     // [impl format.features.grouping]
-    pub features: BTreeMap<String, Vec<String>>,
+    pub features: BTreeMap<String, BTreeSet<String>>,
     /// Hidden dependency patterns (may include globs).
     // [impl format.hidden.metadata]
-    pub hidden: Vec<String>,
+    pub hidden: BTreeSet<String>,
     /// Templates registered in metadata.
     pub templates: BTreeMap<String, TemplateSpec>,
 }
@@ -299,16 +299,16 @@ impl BatteryPackSpec {
     ///
     /// If a crate is already present, its Cargo features are merged additively.
     // [impl format.features.augment]
-    fn add_feature_crates(&self, crate_names: &[String], result: &mut BTreeMap<String, CrateSpec>) {
+    fn add_feature_crates(
+        &self,
+        crate_names: &BTreeSet<String>,
+        result: &mut BTreeMap<String, CrateSpec>,
+    ) {
         for crate_name in crate_names {
             if let Some(spec) = self.crates.get(crate_name) {
                 if let Some(existing) = result.get_mut(crate_name) {
                     // Already present — merge features additively
-                    for feat in &spec.features {
-                        if !existing.features.contains(feat) {
-                            existing.features.push(feat.clone());
-                        }
-                    }
+                    existing.features.extend(spec.features.iter().cloned());
                 } else {
                     result.insert(crate_name.clone(), spec.clone());
                 }
@@ -319,6 +319,16 @@ impl BatteryPackSpec {
     /// Resolve all crates regardless of features or optional status.
     pub fn resolve_all(&self) -> BTreeMap<String, CrateSpec> {
         self.crates.clone()
+    }
+
+    /// Resolve all visible (non-hidden) crates regardless of features or optional status.
+    // [impl format.hidden.effect]
+    pub fn resolve_all_visible(&self) -> BTreeMap<String, CrateSpec> {
+        self.crates
+            .iter()
+            .filter(|(name, _)| !self.is_hidden(name))
+            .map(|(name, spec)| (name.clone(), spec.clone()))
+            .collect()
     }
 
     /// Check whether a crate name matches the hidden patterns.
@@ -429,7 +439,7 @@ pub struct MergedCrateSpec {
     /// Recommended version (highest wins across all packs).
     pub version: String,
     /// Union of all recommended Cargo features.
-    pub features: Vec<String>,
+    pub features: BTreeSet<String>,
     /// Which dependency sections this crate should be added to.
     /// Usually contains a single element. Contains two elements
     /// when one pack lists it as dev and another as build.
@@ -466,11 +476,7 @@ pub fn merge_crate_specs(
                     }
 
                     // Features: union
-                    for feat in &spec.features {
-                        if !existing.features.contains(feat) {
-                            existing.features.push(feat.clone());
-                        }
-                    }
+                    existing.features.extend(spec.features.iter().cloned());
 
                     // Dep kind: merge
                     existing.dep_kinds = merge_dep_kinds(&existing.dep_kinds, spec.dep_kind);
@@ -645,14 +651,18 @@ pub fn parse_battery_pack(manifest_str: &str) -> Result<BatteryPackSpec, Error> 
     parse_dep_section(&raw.build_dependencies, DepKind::Build, &mut crates);
 
     // Parse features (standard Cargo features)
-    let features = raw.features;
+    let features: BTreeMap<String, BTreeSet<String>> = raw
+        .features
+        .into_iter()
+        .map(|(k, v)| (k, v.into_iter().collect()))
+        .collect();
 
     // Parse hidden deps from package.metadata.battery-pack
-    let hidden = package
+    let hidden: BTreeSet<String> = package
         .metadata
         .as_ref()
         .and_then(|m| m.battery_pack.as_ref())
-        .map(|bp| bp.hidden.clone())
+        .map(|bp| bp.hidden.iter().cloned().collect())
         .unwrap_or_default();
 
     // [impl format.templates.metadata]
@@ -702,7 +712,7 @@ fn parse_dep_section(
             name.clone(),
             CrateSpec {
                 version: dep.version,
-                features: dep.features,
+                features: dep.features.into_iter().collect(),
                 dep_kind: kind,
                 optional: dep.optional,
             },
@@ -955,7 +965,7 @@ mod tests {
         let serde = &spec.crates["serde"];
         assert_eq!(serde.dep_kind, DepKind::Normal);
         assert_eq!(serde.version, "1");
-        assert_eq!(serde.features, vec!["derive"]);
+        assert_eq!(serde.features, BTreeSet::from(["derive".to_string()]));
 
         let insta = &spec.crates["insta"];
         assert_eq!(insta.dep_kind, DepKind::Dev);
@@ -982,7 +992,10 @@ mod tests {
         let spec = parse_battery_pack(manifest).unwrap();
         let tokio = &spec.crates["tokio"];
         assert_eq!(tokio.version, "1");
-        assert_eq!(tokio.features, vec!["macros", "rt-multi-thread"]);
+        assert_eq!(
+            tokio.features,
+            BTreeSet::from(["macros".to_string(), "rt-multi-thread".to_string()])
+        );
         assert!(!tokio.optional);
 
         let anyhow = &spec.crates["anyhow"];
@@ -1029,8 +1042,14 @@ mod tests {
 
         let spec = parse_battery_pack(manifest).unwrap();
         assert_eq!(spec.features.len(), 2);
-        assert_eq!(spec.features["default"], vec!["clap", "dialoguer"]);
-        assert_eq!(spec.features["indicators"], vec!["indicatif", "console"]);
+        assert_eq!(
+            spec.features["default"],
+            BTreeSet::from(["clap".to_string(), "dialoguer".to_string()])
+        );
+        assert_eq!(
+            spec.features["indicators"],
+            BTreeSet::from(["indicatif".to_string(), "console".to_string()])
+        );
     }
 
     #[test]
@@ -1052,7 +1071,7 @@ mod tests {
         "#;
 
         let spec = parse_battery_pack(manifest).unwrap();
-        assert_eq!(spec.hidden, vec!["serde*"]);
+        assert_eq!(spec.hidden, BTreeSet::from(["serde*".to_string()]));
     }
 
     #[test]
@@ -2072,7 +2091,10 @@ mod tests {
     fn crate_spec(version: &str, features: &[&str], dep_kind: DepKind) -> CrateSpec {
         CrateSpec {
             version: version.to_string(),
-            features: features.iter().map(|s| s.to_string()).collect(),
+            features: features
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<BTreeSet<_>>(),
             dep_kind,
             optional: false,
         }
@@ -2280,7 +2302,10 @@ mod tests {
         let merged = merge_crate_specs(&[pack]);
         assert_eq!(merged.len(), 2);
         assert_eq!(merged["serde"].version, "1");
-        assert_eq!(merged["serde"].features, vec!["derive"]);
+        assert_eq!(
+            merged["serde"].features,
+            BTreeSet::from(["derive".to_string()])
+        );
         assert_eq!(merged["serde"].dep_kinds, vec![DepKind::Normal]);
     }
 

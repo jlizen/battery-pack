@@ -377,25 +377,34 @@ fn add_all_features_fancy() {
     let content = read_cargo_toml(&tmp);
     let deps = extract_section(&content, "[dependencies]");
     let dev_deps = extract_section(&content, "[dev-dependencies]");
+    let build_deps = extract_section(&content, "[build-dependencies]");
 
-    // All non-hidden crates should appear
+    // Normal deps in [dependencies] — hidden crates (serde*, cc) filtered out
+    // [verify format.hidden.effect]
     expect![[r#"
         [dependencies]
-        assert_cmd = "2.0"
-        cc = "1.0"
         clap = { version = "4", features = ["derive"] }
         console = "0.15"
         dialoguer = "0.11"
         indicatif = "0.17"
-        predicates = "3.0"
-        serde = { version = "1", features = ["derive"] }
-        serde_json = "1"
     "#]]
     .assert_eq(&deps);
 
-    // Dev-deps should land in their own section
-    expect![""]
+    // Dev-deps land in [dev-dependencies]
+    expect![[r#"
+        [dev-dependencies]
+        assert_cmd = "2.0"
+        predicates = "3.0"
+
+    "#]]
     .assert_eq(&dev_deps);
+
+    // Build-deps: only the battery pack itself (cc is hidden)
+    // [verify format.hidden.effect]
+    assert!(
+        !build_deps.contains("cc = \"1.0\""),
+        "cc is hidden and should not appear in [build-dependencies]: {build_deps}"
+    );
 }
 
 // ============================================================================
@@ -480,10 +489,7 @@ fn add_target_package_writes_metadata() {
 
     expect![[r#"
         [package.metadata.battery-pack.basic-battery-pack]
-        features = [
-            "default",
-            "default",
-        ]
+        features = ["default"]
     "#]]
     .assert_eq(&meta);
 }

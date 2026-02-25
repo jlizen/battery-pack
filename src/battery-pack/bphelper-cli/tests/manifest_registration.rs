@@ -4,6 +4,7 @@
 //! battery pack registration, feature storage, and dependency management
 //! in user Cargo.toml files.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 fn fixtures_dir() -> PathBuf {
@@ -83,7 +84,7 @@ basic-battery-pack = { version = "0.1.0", features = ["default"] }
 
     // read_active_features can parse the table format
     let features = bphelper_cli::read_active_features(manifest, "basic-battery-pack");
-    assert_eq!(features, vec!["default"]);
+    assert_eq!(features, BTreeSet::from(["default".to_string()]));
 }
 
 // ============================================================================
@@ -104,7 +105,7 @@ basic-battery-pack = "0.1.0"
 "#;
 
     let features = bphelper_cli::read_active_features(manifest, "basic-battery-pack");
-    assert_eq!(features, vec!["default"]);
+    assert_eq!(features, BTreeSet::from(["default".to_string()]));
 }
 
 // [verify manifest.features.default-implicit]
@@ -118,7 +119,7 @@ version = "0.1.0"
 "#;
 
     let features = bphelper_cli::read_active_features(manifest, "basic-battery-pack");
-    assert_eq!(features, vec!["default"]);
+    assert_eq!(features, BTreeSet::from(["default".to_string()]));
 }
 
 // [verify manifest.features.default-implicit]
@@ -135,7 +136,7 @@ other-battery-pack = "0.2.0"
 "#;
 
     let features = bphelper_cli::read_active_features(manifest, "basic-battery-pack");
-    assert_eq!(features, vec!["default"]);
+    assert_eq!(features, BTreeSet::from(["default".to_string()]));
 }
 
 // ============================================================================
@@ -157,7 +158,7 @@ basic-battery-pack = "0.1.0"
 
     let features = bphelper_cli::read_active_features(manifest, "basic-battery-pack");
     // Short form (just version string) implies default feature
-    assert_eq!(features, vec!["default"]);
+    assert_eq!(features, BTreeSet::from(["default".to_string()]));
 }
 
 // ============================================================================
@@ -178,7 +179,10 @@ features = ["default", "indicators"]
 "#;
 
     let features = bphelper_cli::read_active_features(manifest, "cli-battery-pack");
-    assert_eq!(features, vec!["default", "indicators"]);
+    assert_eq!(
+        features,
+        BTreeSet::from(["default".to_string(), "indicators".to_string()])
+    );
 }
 
 // [verify manifest.features.storage]
@@ -194,7 +198,7 @@ features = ["all-errors"]
 "#;
 
     let features = bphelper_cli::read_active_features(manifest, "basic-battery-pack");
-    assert_eq!(features, vec!["all-errors"]);
+    assert_eq!(features, BTreeSet::from(["all-errors".to_string()]));
 }
 
 // ============================================================================
@@ -208,7 +212,7 @@ fn deps_add_simple_version() {
     let mut table = toml_edit::Table::new();
     let spec = bphelper_manifest::CrateSpec {
         version: "1.0".to_string(),
-        features: vec![],
+        features: BTreeSet::new(),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -227,7 +231,7 @@ fn deps_add_does_not_add_to_wrong_key() {
     let mut table = toml_edit::Table::new();
     let spec = bphelper_manifest::CrateSpec {
         version: "4".to_string(),
-        features: vec!["derive".to_string()],
+        features: BTreeSet::from(["derive".to_string()]),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -249,7 +253,7 @@ fn deps_version_features_included() {
     let mut table = toml_edit::Table::new();
     let spec = bphelper_manifest::CrateSpec {
         version: "4".to_string(),
-        features: vec!["derive".to_string(), "env".to_string()],
+        features: BTreeSet::from(["derive".to_string(), "env".to_string()]),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -272,7 +276,7 @@ fn deps_version_features_empty_features_uses_simple_string() {
     let mut table = toml_edit::Table::new();
     let spec = bphelper_manifest::CrateSpec {
         version: "1".to_string(),
-        features: vec![],
+        features: BTreeSet::new(),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -304,7 +308,7 @@ fn deps_workspace_adds_to_workspace_deps_table() {
     let mut ws_table = toml_edit::Table::new();
     let spec = bphelper_manifest::CrateSpec {
         version: "1".to_string(),
-        features: vec!["derive".to_string()],
+        features: BTreeSet::from(["derive".to_string()]),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -342,7 +346,7 @@ fn deps_no_workspace_adds_directly() {
     let mut table = toml_edit::Table::new();
     let spec = bphelper_manifest::CrateSpec {
         version: "2".to_string(),
-        features: vec![],
+        features: BTreeSet::new(),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -358,7 +362,7 @@ fn deps_no_workspace_adds_with_features() {
     let mut table = toml_edit::Table::new();
     let spec = bphelper_manifest::CrateSpec {
         version: "1".to_string(),
-        features: vec!["derive".to_string()],
+        features: BTreeSet::from(["derive".to_string()]),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -387,7 +391,7 @@ fn deps_existing_does_not_overwrite_version() {
 
     let spec = bphelper_manifest::CrateSpec {
         version: "1.0.80".to_string(),
-        features: vec![],
+        features: BTreeSet::new(),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -409,7 +413,7 @@ fn deps_existing_adds_missing_features() {
 
     let spec = bphelper_manifest::CrateSpec {
         version: "4".to_string(),
-        features: vec!["derive".to_string(), "env".to_string()],
+        features: BTreeSet::from(["derive".to_string(), "env".to_string()]),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -435,7 +439,7 @@ fn deps_existing_preserves_user_features() {
 
     let spec = bphelper_manifest::CrateSpec {
         version: "4".to_string(),
-        features: vec!["derive".to_string()],
+        features: BTreeSet::from(["derive".to_string()]),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -465,7 +469,7 @@ fn deps_existing_no_change_when_up_to_date() {
 
     let spec = bphelper_manifest::CrateSpec {
         version: "1".to_string(),
-        features: vec![],
+        features: BTreeSet::new(),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -492,7 +496,7 @@ fn deps_add_respects_dep_kind_in_spec() {
         let mut table = toml_edit::Table::new();
         let spec = bphelper_manifest::CrateSpec {
             version: "1.0".to_string(),
-            features: vec![],
+            features: BTreeSet::new(),
             dep_kind: kind,
             optional: false,
         };
@@ -614,7 +618,10 @@ features = ["default", "all-errors"]
 "#;
 
     let features = bphelper_cli::read_active_features(manifest, "basic-battery-pack");
-    assert_eq!(features, vec!["default", "all-errors"]);
+    assert_eq!(
+        features,
+        BTreeSet::from(["default".to_string(), "all-errors".to_string()])
+    );
 }
 
 // [verify manifest.register.format]
@@ -641,10 +648,13 @@ error-battery-pack = "0.4.0"
     assert_eq!(names.len(), 2);
 
     let cli_features = bphelper_cli::read_active_features(manifest, "cli-battery-pack");
-    assert_eq!(cli_features, vec!["default", "indicators"]);
+    assert_eq!(
+        cli_features,
+        BTreeSet::from(["default".to_string(), "indicators".to_string()])
+    );
 
     let error_features = bphelper_cli::read_active_features(manifest, "error-battery-pack");
-    assert_eq!(error_features, vec!["default"]);
+    assert_eq!(error_features, BTreeSet::from(["default".to_string()]));
 }
 
 // ============================================================================
@@ -658,7 +668,7 @@ fn sync_adds_missing_dep() {
 
     let spec = bphelper_manifest::CrateSpec {
         version: "1".to_string(),
-        features: vec![],
+        features: BTreeSet::new(),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -680,7 +690,7 @@ fn sync_converts_simple_string_to_table_when_adding_features() {
 
     let spec = bphelper_manifest::CrateSpec {
         version: "1".to_string(),
-        features: vec!["backtrace".to_string()],
+        features: BTreeSet::from(["backtrace".to_string()]),
         dep_kind: bphelper_manifest::DepKind::Normal,
         optional: false,
     };
@@ -697,4 +707,79 @@ fn sync_converts_simple_string_to_table_when_adding_features() {
         features.iter().next().unwrap().as_str().unwrap(),
         "backtrace"
     );
+}
+
+// ============================================================================
+// Workspace metadata reading — read_active_features_ws
+// ============================================================================
+
+#[test]
+fn read_active_features_from_workspace_metadata() {
+    // When battery-pack metadata lives in workspace.metadata, read_active_features_ws
+    // must correctly extract the features array.
+    let ws_manifest = r#"
+[workspace]
+members = ["my-app"]
+
+[workspace.metadata.battery-pack.cli-battery-pack]
+features = ["default", "indicators"]
+"#;
+
+    let features = bphelper_cli::read_active_features_ws(ws_manifest, "cli-battery-pack");
+    assert_eq!(
+        features,
+        BTreeSet::from(["default".to_string(), "indicators".to_string()])
+    );
+}
+
+#[test]
+fn read_active_features_ws_fallback_to_default() {
+    // When workspace.metadata.battery-pack exists but the specific battery pack
+    // is not registered, default should be returned.
+    let ws_manifest = r#"
+[workspace]
+members = ["my-app"]
+
+[workspace.metadata.battery-pack.other-battery-pack]
+features = ["default"]
+"#;
+
+    let features = bphelper_cli::read_active_features_ws(ws_manifest, "cli-battery-pack");
+    assert_eq!(features, BTreeSet::from(["default".to_string()]));
+}
+
+#[test]
+fn read_active_features_ws_no_metadata_at_all() {
+    // When workspace Cargo.toml has no metadata section at all, default is returned.
+    let ws_manifest = r#"
+[workspace]
+members = ["my-app"]
+"#;
+
+    let features = bphelper_cli::read_active_features_ws(ws_manifest, "cli-battery-pack");
+    assert_eq!(features, BTreeSet::from(["default".to_string()]));
+}
+
+#[test]
+fn read_active_features_ws_multiple_battery_packs() {
+    // Multiple battery packs can be registered in workspace metadata.
+    let ws_manifest = r#"
+[workspace]
+members = ["my-app"]
+
+[workspace.metadata.battery-pack.cli-battery-pack]
+features = ["default", "indicators"]
+
+[workspace.metadata.battery-pack.error-battery-pack]
+features = ["all-errors"]
+"#;
+
+    let cli_features = bphelper_cli::read_active_features_ws(ws_manifest, "cli-battery-pack");
+    assert_eq!(
+        cli_features,
+        BTreeSet::from(["default".to_string(), "indicators".to_string()])
+    );
+
+    let error_features = bphelper_cli::read_active_features_ws(ws_manifest, "error-battery-pack");
+    assert_eq!(error_features, BTreeSet::from(["all-errors".to_string()]));
 }

@@ -1,6 +1,8 @@
 //! Round-trip tests proving that `toml_edit`-based manipulation preserves
 //! existing TOML formatting, comments, and ordering.
 
+use std::collections::BTreeSet;
+
 use bphelper_cli::{add_dep_to_table, sync_dep_in_table};
 use bphelper_manifest::{CrateSpec, DepKind};
 
@@ -13,7 +15,7 @@ fn parse_doc(input: &str) -> toml_edit::DocumentMut {
 fn simple_spec(version: &str) -> CrateSpec {
     CrateSpec {
         version: version.to_string(),
-        features: vec![],
+        features: BTreeSet::new(),
         dep_kind: DepKind::Normal,
         optional: false,
     }
