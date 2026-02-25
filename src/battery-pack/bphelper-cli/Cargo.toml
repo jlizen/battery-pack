@@ -28,3 +28,7 @@ dialoguer = "0.11"
 syn = { version = "2", features = ["full"] }
 toml_edit = "0.22"
 semver = "1"
+
+[dev-dependencies]
+expect-test.workspace = true
+tempfile = "3"
