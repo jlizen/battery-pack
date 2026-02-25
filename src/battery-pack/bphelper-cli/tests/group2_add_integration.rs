@@ -391,6 +391,7 @@ fn add_all_features_fancy() {
     .assert_eq(&deps);
 
     // Dev-deps land in [dev-dependencies]
+    // [verify cli.add.dep-kind]
     expect![[r#"
         [dev-dependencies]
         assert_cmd = "2.0"

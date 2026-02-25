@@ -713,6 +713,7 @@ fn sync_converts_simple_string_to_table_when_adding_features() {
 // Workspace metadata reading — read_active_features_ws
 // ============================================================================
 
+// [verify manifest.register.workspace-default]
 #[test]
 fn read_active_features_from_workspace_metadata() {
     // When battery-pack metadata lives in workspace.metadata, read_active_features_ws
@@ -732,6 +733,7 @@ features = ["default", "indicators"]
     );
 }
 
+// [verify manifest.register.workspace-default]
 #[test]
 fn read_active_features_ws_fallback_to_default() {
     // When workspace.metadata.battery-pack exists but the specific battery pack
@@ -748,6 +750,7 @@ features = ["default"]
     assert_eq!(features, BTreeSet::from(["default".to_string()]));
 }
 
+// [verify manifest.register.workspace-default]
 #[test]
 fn read_active_features_ws_no_metadata_at_all() {
     // When workspace Cargo.toml has no metadata section at all, default is returned.
@@ -760,6 +763,7 @@ members = ["my-app"]
     assert_eq!(features, BTreeSet::from(["default".to_string()]));
 }
 
+// [verify manifest.register.both-levels]
 #[test]
 fn read_active_features_ws_multiple_battery_packs() {
     // Multiple battery packs can be registered in workspace metadata.
