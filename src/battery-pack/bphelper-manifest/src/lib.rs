@@ -144,7 +144,7 @@ pub struct CrateSpec {
 #[derive(Debug, Clone)]
 pub struct TemplateSpec {
     pub path: String,
-    pub description: String,
+    pub description: Option<String>,
 }
 
 /// Parsed battery pack specification.
@@ -615,7 +615,8 @@ struct RawBatteryMetadata {
 #[derive(Deserialize)]
 struct RawTemplateSpec {
     path: String,
-    description: String,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 /// Parsed fields from a single dependency entry.
@@ -1090,8 +1091,8 @@ mod tests {
         assert_eq!(spec.templates.len(), 2);
         assert_eq!(spec.templates["default"].path, "templates/default");
         assert_eq!(
-            spec.templates["advanced"].description,
-            "Full-featured setup"
+            spec.templates["advanced"].description.as_deref(),
+            Some("Full-featured setup")
         );
     }
 

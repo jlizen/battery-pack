@@ -287,43 +287,8 @@ struct SearchCrate {
     description: Option<String>,
 }
 
-// ============================================================================
-// Battery pack metadata types (from Cargo.toml)
-// ============================================================================
-
-#[derive(Deserialize, Default)]
-struct CargoManifest {
-    package: Option<PackageSection>,
-    #[serde(default)]
-    dependencies: BTreeMap<String, toml::Value>,
-}
-
-#[derive(Deserialize, Default)]
-struct PackageSection {
-    name: Option<String>,
-    version: Option<String>,
-    description: Option<String>,
-    repository: Option<String>,
-    metadata: Option<PackageMetadata>,
-}
-
-#[derive(Deserialize, Default)]
-struct PackageMetadata {
-    battery: Option<BatteryMetadata>,
-}
-
-#[derive(Deserialize, Default)]
-struct BatteryMetadata {
-    #[serde(default)]
-    templates: BTreeMap<String, TemplateConfig>,
-}
-
-#[derive(Deserialize)]
-pub struct TemplateConfig {
-    pub path: String,
-    #[serde(default)]
-    pub description: Option<String>,
-}
+/// Backward-compatible alias for `bphelper_manifest::TemplateSpec`.
+pub type TemplateConfig = bphelper_manifest::TemplateSpec;
 
 // ============================================================================
 // crates.io owner types
@@ -1791,24 +1756,17 @@ fn parse_template_metadata(
     manifest_content: &str,
     crate_name: &str,
 ) -> Result<BTreeMap<String, TemplateConfig>> {
-    let manifest: CargoManifest =
-        toml::from_str(manifest_content).with_context(|| "Failed to parse Cargo.toml")?;
+    let spec = bphelper_manifest::parse_battery_pack(manifest_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse Cargo.toml: {}", e))?;
 
-    let templates = manifest
-        .package
-        .and_then(|p| p.metadata)
-        .and_then(|m| m.battery)
-        .map(|b| b.templates)
-        .unwrap_or_default();
-
-    if templates.is_empty() {
+    if spec.templates.is_empty() {
         bail!(
             "Battery pack '{}' has no templates defined in [package.metadata.battery.templates]",
             crate_name
         );
     }
 
-    Ok(templates)
+    Ok(spec.templates)
 }
 
 // [impl format.templates.selection]
@@ -2099,67 +2057,45 @@ pub fn fetch_battery_pack_detail(name: &str, path: Option<&str>) -> Result<Batte
         .path()
         .join(format!("{}-{}", crate_name, crate_info.version));
 
+    // Parse the battery pack spec
+    let manifest_path = crate_dir.join("Cargo.toml");
+    let manifest_content = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+    let spec = bphelper_manifest::parse_battery_pack(&manifest_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse battery pack: {}", e))?;
+
     // Fetch owners from crates.io
     let owners = fetch_owners(&crate_name)?;
 
-    build_battery_pack_detail(&crate_dir, crate_name, crate_info.version, owners)
+    build_battery_pack_detail(&crate_dir, &spec, owners)
 }
 
 /// Fetch detailed battery pack info from a local path
 fn fetch_battery_pack_detail_from_path(path: &str) -> Result<BatteryPackDetail> {
     let crate_dir = std::path::Path::new(path);
-
-    // Read Cargo.toml to extract name and version
     let manifest_path = crate_dir.join("Cargo.toml");
     let manifest_content = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
-    let manifest: CargoManifest =
-        toml::from_str(&manifest_content).with_context(|| "Failed to parse Cargo.toml")?;
 
-    let package = manifest.package.unwrap_or_default();
-    let crate_name = package
-        .name
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
-    let version = package
-        .version
-        .clone()
-        .unwrap_or_else(|| "0.0.0".to_string());
+    let spec = bphelper_manifest::parse_battery_pack(&manifest_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse battery pack: {}", e))?;
 
-    build_battery_pack_detail(
-        crate_dir,
-        crate_name,
-        version,
-        Vec::new(), // No owners for local path
-    )
+    build_battery_pack_detail(crate_dir, &spec, Vec::new())
 }
 
-/// Helper function to build BatteryPackDetail from already-resolved parameters.
-/// Contains shared logic for both crates.io and local path sources.
+/// Build `BatteryPackDetail` from a parsed `BatteryPackSpec`.
+///
+/// Derives extends/crates from the spec's crate keys, fetches repo tree for
+/// template path resolution, and scans for examples.
 fn build_battery_pack_detail(
     crate_dir: &Path,
-    crate_name: String,
-    version: String,
+    spec: &bphelper_manifest::BatteryPackSpec,
     owners: Vec<Owner>,
 ) -> Result<BatteryPackDetail> {
-    // Read and parse Cargo.toml
-    let manifest_path = crate_dir.join("Cargo.toml");
-    let manifest_content = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
-    let manifest: CargoManifest =
-        toml::from_str(&manifest_content).with_context(|| "Failed to parse Cargo.toml")?;
-
-    // Extract info
-    let package = manifest.package.unwrap_or_default();
-    let description = package.description.clone().unwrap_or_default();
-    let repository = package.repository.clone();
-    let battery = package.metadata.and_then(|m| m.battery).unwrap_or_default();
-
-    // Split dependencies into battery packs and regular crates
-    let (extends_raw, crates_raw): (Vec<_>, Vec<_>) = manifest
-        .dependencies
+    // Split crate keys into battery packs (extends) and regular crates
+    let (extends_raw, crates_raw): (Vec<_>, Vec<_>) = spec
+        .crates
         .keys()
-        .filter(|d| *d != "battery-pack")
         .partition(|d| d.ends_with("-battery-pack"));
 
     let extends: Vec<String> = extends_raw
@@ -2169,20 +2105,20 @@ fn build_battery_pack_detail(
     let crates: Vec<String> = crates_raw.into_iter().cloned().collect();
 
     // Fetch the GitHub repository tree to resolve paths
-    let repo_tree = repository.as_ref().and_then(|r| fetch_github_tree(r));
+    let repo_tree = spec.repository.as_ref().and_then(|r| fetch_github_tree(r));
 
     // Convert templates with resolved repo paths
-    let templates = battery
+    let templates = spec
         .templates
-        .into_iter()
-        .map(|(name, config)| {
+        .iter()
+        .map(|(name, tmpl)| {
             let repo_path = repo_tree
                 .as_ref()
-                .and_then(|tree| find_template_path(tree, &config.path));
+                .and_then(|tree| find_template_path(tree, &tmpl.path));
             TemplateInfo {
-                name,
-                path: config.path,
-                description: config.description,
+                name: name.clone(),
+                path: tmpl.path.clone(),
+                description: tmpl.description.clone(),
                 repo_path,
             }
         })
@@ -2192,11 +2128,11 @@ fn build_battery_pack_detail(
     let examples = scan_examples(crate_dir, repo_tree.as_deref());
 
     Ok(BatteryPackDetail {
-        short_name: short_name(&crate_name).to_string(),
-        name: crate_name,
-        version,
-        description,
-        repository,
+        short_name: short_name(&spec.name).to_string(),
+        name: spec.name.clone(),
+        version: spec.version.clone(),
+        description: spec.description.clone(),
+        repository: spec.repository.clone(),
         owners: owners.into_iter().map(OwnerInfo::from).collect(),
         crates,
         extends,
