@@ -15,6 +15,16 @@ mod tui;
 const CRATES_IO_API: &str = "https://crates.io/api/v1/crates";
 const CRATES_IO_CDN: &str = "https://static.crates.io/crates";
 
+fn http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
+            .build()
+            .expect("failed to build HTTP client")
+    })
+}
+
 // [impl cli.source.flag]
 // [impl cli.source.replace]
 #[derive(Debug, Clone)]
@@ -1706,9 +1716,7 @@ struct CrateMetadata {
 
 /// Look up a crate on crates.io and return its metadata
 fn lookup_crate(crate_name: &str) -> Result<CrateMetadata> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
-        .build()?;
+    let client = http_client();
 
     let url = format!("{}/{}", CRATES_IO_API, crate_name);
     let response = client
@@ -1741,9 +1749,7 @@ fn lookup_crate(crate_name: &str) -> Result<CrateMetadata> {
 
 /// Download a crate tarball and extract it to a temp directory
 fn download_and_extract_crate(crate_name: &str, version: &str) -> Result<tempfile::TempDir> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
-        .build()?;
+    let client = http_client();
 
     // Download from CDN: https://static.crates.io/crates/{name}/{name}-{version}.crate
     let url = format!(
@@ -1931,9 +1937,7 @@ pub fn fetch_battery_pack_list(
 }
 
 fn fetch_battery_pack_list_from_registry(filter: Option<&str>) -> Result<Vec<BatteryPackSummary>> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
-        .build()?;
+    let client = http_client();
 
     // Build the search URL with keyword filter
     let url = match filter {
@@ -2302,9 +2306,7 @@ fn print_battery_pack_detail(name: &str, path: Option<&str>) -> Result<()> {
 }
 
 fn fetch_owners(crate_name: &str) -> Result<Vec<Owner>> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
-        .build()?;
+    let client = http_client();
 
     let url = format!("{}/{}/owners", CRATES_IO_API, crate_name);
     let response = client
@@ -2387,10 +2389,7 @@ fn fetch_github_tree(repository: &str) -> Option<Vec<String>> {
     let gh_path = gh_path.strip_suffix(".git").unwrap_or(gh_path);
     let gh_path = gh_path.trim_end_matches('/');
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
-        .build()
-        .ok()?;
+    let client = http_client();
 
     // Fetch the tree recursively using the main branch
     let url = format!(
