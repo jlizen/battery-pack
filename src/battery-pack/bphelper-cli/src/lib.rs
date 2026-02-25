@@ -692,11 +692,11 @@ pub fn add_battery_pack(
         }
 
         // [impl cli.add.dep-kind]
-        write_workspace_refs_by_kind(&mut user_doc, &crates_to_sync);
+        write_workspace_refs_by_kind(&mut user_doc, &crates_to_sync, false);
     } else {
         // [impl manifest.deps.no-workspace]
         // [impl cli.add.dep-kind]
-        write_deps_by_kind(&mut user_doc, &crates_to_sync);
+        write_deps_by_kind(&mut user_doc, &crates_to_sync, false);
     }
 
     // [impl manifest.register.location]
@@ -827,23 +827,8 @@ fn sync_battery_packs(project_dir: &Path) -> Result<()> {
 
             // Ensure crate-level references exist in the correct sections
             // [impl cli.add.dep-kind]
-            for (dep_name, dep_spec) in &expected {
-                let section = dep_kind_section(dep_spec.dep_kind);
-                let table =
-                    user_doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-                if let Some(table) = table.as_table_mut() {
-                    if !table.contains_key(dep_name) {
-                        let mut dep = toml_edit::InlineTable::new();
-                        dep.insert("workspace", toml_edit::Value::from(true));
-                        table.insert(
-                            dep_name,
-                            toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
-                        );
-                        total_changes += 1;
-                        println!("  + {} (added workspace reference)", dep_name);
-                    }
-                }
-            }
+            let refs_added = write_workspace_refs_by_kind(&mut user_doc, &expected, true);
+            total_changes += refs_added;
         } else {
             // [impl manifest.deps.no-workspace]
             // [impl cli.add.dep-kind]
@@ -965,33 +950,10 @@ fn enable_feature(
             .context("Failed to write workspace Cargo.toml")?;
 
         // [impl cli.add.dep-kind]
-        for (dep_name, dep_spec) in &crates_to_sync {
-            let section = dep_kind_section(dep_spec.dep_kind);
-            let table =
-                user_doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-            if let Some(table) = table.as_table_mut() {
-                if !table.contains_key(dep_name) {
-                    let mut dep = toml_edit::InlineTable::new();
-                    dep.insert("workspace", toml_edit::Value::from(true));
-                    table.insert(
-                        dep_name,
-                        toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
-                    );
-                }
-            }
-        }
+        write_workspace_refs_by_kind(&mut user_doc, &crates_to_sync, true);
     } else {
         // [impl cli.add.dep-kind]
-        for (dep_name, dep_spec) in &crates_to_sync {
-            let section = dep_kind_section(dep_spec.dep_kind);
-            let table =
-                user_doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-            if let Some(table) = table.as_table_mut() {
-                if !table.contains_key(dep_name) {
-                    add_dep_to_table(table, dep_name, dep_spec);
-                }
-            }
-        }
+        write_deps_by_kind(&mut user_doc, &crates_to_sync, true);
     }
 
     // Update active features in the correct metadata location
@@ -1217,43 +1179,58 @@ fn dep_kind_section(kind: bphelper_manifest::DepKind) -> &'static str {
     }
 }
 
-/// Write crates to the correct dependency sections based on their `dep_kind`.
+/// Write dependencies (with full version+features) to the correct sections by `dep_kind`.
 ///
-/// Groups crates by kind and inserts each into the appropriate
-/// `[dependencies]`, `[dev-dependencies]`, or `[build-dependencies]` table.
+/// When `if_missing` is true, only inserts crates that don't already exist in
+/// the target section. Returns the number of crates actually written.
 // [impl cli.add.dep-kind]
 fn write_deps_by_kind(
     doc: &mut toml_edit::DocumentMut,
     crates: &BTreeMap<String, bphelper_manifest::CrateSpec>,
-) {
+    if_missing: bool,
+) -> usize {
+    let mut written = 0;
     for (dep_name, dep_spec) in crates {
         let section = dep_kind_section(dep_spec.dep_kind);
         let table = doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
         if let Some(table) = table.as_table_mut() {
-            add_dep_to_table(table, dep_name, dep_spec);
+            if !if_missing || !table.contains_key(dep_name) {
+                add_dep_to_table(table, dep_name, dep_spec);
+                written += 1;
+            }
         }
     }
+    written
 }
 
 /// Write workspace references (`{ workspace = true }`) to the correct
 /// dependency sections based on each crate's `dep_kind`.
+///
+/// When `if_missing` is true, only inserts references for crates that don't
+/// already exist in the target section. Returns the number of refs written.
 // [impl cli.add.dep-kind]
 fn write_workspace_refs_by_kind(
     doc: &mut toml_edit::DocumentMut,
     crates: &BTreeMap<String, bphelper_manifest::CrateSpec>,
-) {
+    if_missing: bool,
+) -> usize {
+    let mut written = 0;
     for (dep_name, dep_spec) in crates {
         let section = dep_kind_section(dep_spec.dep_kind);
         let table = doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
         if let Some(table) = table.as_table_mut() {
-            let mut dep = toml_edit::InlineTable::new();
-            dep.insert("workspace", toml_edit::Value::from(true));
-            table.insert(
-                dep_name,
-                toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
-            );
+            if !if_missing || !table.contains_key(dep_name) {
+                let mut dep = toml_edit::InlineTable::new();
+                dep.insert("workspace", toml_edit::Value::from(true));
+                table.insert(
+                    dep_name,
+                    toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+                );
+                written += 1;
+            }
         }
     }
+    written
 }
 
 /// Add a dependency to a toml_edit table (non-workspace mode).
