@@ -183,6 +183,7 @@ dependencies = [
  "console",
  "crossterm",
  "dialoguer",
+ "expect-test",
  "flate2",
  "open",
  "ratatui",

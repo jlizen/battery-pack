@@ -7,13 +7,21 @@ use flate2::read::GzDecoder;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tar::Archive;
 
 mod tui;
 
 const CRATES_IO_API: &str = "https://crates.io/api/v1/crates";
 const CRATES_IO_CDN: &str = "https://static.crates.io/crates";
+
+// [impl cli.source.flag]
+// [impl cli.source.replace]
+#[derive(Debug, Clone)]
+pub enum CrateSource {
+    Registry,
+    Local(PathBuf),
+}
 
 // [impl cli.bare.help]
 #[derive(Parser)]
@@ -29,6 +37,11 @@ pub struct Cli {
 pub enum Commands {
     /// Battery pack commands
     Bp {
+        // [impl cli.source.subcommands]
+        /// Use a local workspace as the battery pack source (replaces crates.io)
+        #[arg(long)]
+        crate_source: Option<PathBuf>,
+
         #[command(subcommand)]
         command: BpCommands,
     },
@@ -65,13 +78,30 @@ pub enum BpCommands {
         /// Omit to open the interactive manager.
         battery_pack: Option<String>,
 
-        /// Named features to enable (in addition to the default feature)
-        #[arg(long, short = 'w')]
-        with: Vec<String>,
+        /// Specific crates to add from the battery pack (ignores defaults/features)
+        crates: Vec<String>,
 
-        /// Sync all dev-dependencies regardless of default feature
+        // [impl cli.add.features]
+        // [impl cli.add.features-multiple]
+        /// Named features to enable (comma-separated or repeated)
+        #[arg(long = "features", short = 'F', value_delimiter = ',')]
+        features: Vec<String>,
+
+        // [impl cli.add.no-default-features]
+        /// Skip the default crates; only add crates from named features
         #[arg(long)]
-        all: bool,
+        no_default_features: bool,
+
+        // [impl cli.add.all-features]
+        /// Add every crate the battery pack offers
+        #[arg(long)]
+        all_features: bool,
+
+        // [impl cli.add.target]
+        /// Where to store the battery pack registration
+        /// (workspace, package, or default)
+        #[arg(long)]
+        target: Option<AddTarget>,
 
         /// Use a local path instead of downloading from crates.io
         #[arg(long)]
@@ -123,67 +153,100 @@ pub enum BpCommands {
     },
 }
 
+// [impl cli.add.target]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum AddTarget {
+    /// Register in [workspace.metadata.battery-pack]
+    Workspace,
+    /// Register in [package.metadata.battery-pack]
+    Package,
+    /// Use workspace if a workspace root exists, otherwise package
+    Default,
+}
+
 /// Main entry point for the CLI.
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
+    let project_dir = std::env::current_dir().context("Failed to get current directory")?;
 
     match cli.command {
-        Commands::Bp { command } => match command {
-            BpCommands::New {
-                battery_pack,
-                name,
-                template,
-                path,
-            } => new_from_battery_pack(&battery_pack, name, template, path),
-            BpCommands::Add {
-                battery_pack,
-                with,
-                all,
-                path,
-            } => match battery_pack {
-                Some(name) => add_battery_pack(&name, &with, all, path.as_deref()),
-                // [impl cli.bare.tui]
-                None if std::io::stdout().is_terminal() => tui::run_add(),
-                None => {
-                    bail!(
-                        "No battery pack specified. Use `cargo bp add <name>` or run interactively in a terminal."
-                    )
+        Commands::Bp {
+            crate_source,
+            command,
+        } => {
+            let source = match crate_source {
+                Some(path) => CrateSource::Local(path),
+                None => CrateSource::Registry,
+            };
+            match command {
+                BpCommands::New {
+                    battery_pack,
+                    name,
+                    template,
+                    path,
+                } => new_from_battery_pack(&battery_pack, name, template, path),
+                BpCommands::Add {
+                    battery_pack,
+                    crates,
+                    features,
+                    no_default_features,
+                    all_features,
+                    target,
+                    path,
+                } => match battery_pack {
+                    Some(name) => add_battery_pack(
+                        &name,
+                        &features,
+                        no_default_features,
+                        all_features,
+                        &crates,
+                        target,
+                        path.as_deref(),
+                        &project_dir,
+                    ),
+                    // [impl cli.bare.tui]
+                    None if std::io::stdout().is_terminal() => tui::run_add(source),
+                    None => {
+                        bail!(
+                            "No battery pack specified. Use `cargo bp add <name>` or run interactively in a terminal."
+                        )
+                    }
+                },
+                BpCommands::Sync => sync_battery_packs(&project_dir),
+                BpCommands::Enable {
+                    feature_name,
+                    battery_pack,
+                } => enable_feature(&feature_name, battery_pack.as_deref(), &project_dir),
+                BpCommands::List {
+                    filter,
+                    non_interactive,
+                } => {
+                    // [impl cli.list.interactive]
+                    // [impl cli.list.non-interactive]
+                    if !non_interactive && std::io::stdout().is_terminal() {
+                        tui::run_list(source, filter)
+                    } else {
+                        // [impl cli.list.query]
+                        // [impl cli.list.filter]
+                        print_battery_pack_list(&source, filter.as_deref())
+                    }
                 }
-            },
-            BpCommands::Sync => sync_battery_packs(),
-            BpCommands::Enable {
-                feature_name,
-                battery_pack,
-            } => enable_feature(&feature_name, battery_pack.as_deref()),
-            BpCommands::List {
-                filter,
-                non_interactive,
-            } => {
-                // [impl cli.list.interactive]
-                // [impl cli.list.non-interactive]
-                if !non_interactive && std::io::stdout().is_terminal() {
-                    tui::run_list(filter)
-                } else {
-                    // [impl cli.list.query]
-                    // [impl cli.list.filter]
-                    print_battery_pack_list(filter.as_deref())
+                BpCommands::Show {
+                    battery_pack,
+                    path,
+                    non_interactive,
+                } => {
+                    // [impl cli.show.interactive]
+                    // [impl cli.show.non-interactive]
+                    if !non_interactive && std::io::stdout().is_terminal() {
+                        tui::run_show(&battery_pack, path.as_deref())
+                    } else {
+                        print_battery_pack_detail(&battery_pack, path.as_deref())
+                    }
                 }
+                BpCommands::Validate { path } => validate_battery_pack_cmd(path.as_deref()),
             }
-            BpCommands::Show {
-                battery_pack,
-                path,
-                non_interactive,
-            } => {
-                // [impl cli.show.interactive]
-                // [impl cli.show.non-interactive]
-                if !non_interactive && std::io::stdout().is_terminal() {
-                    tui::run_show(&battery_pack, path.as_deref())
-                } else {
-                    print_battery_pack_detail(&battery_pack, path.as_deref())
-                }
-            }
-            BpCommands::Validate { path } => validate_battery_pack_cmd(path.as_deref()),
-        },
+        }
     }
 }
 
@@ -390,18 +453,115 @@ fn new_from_battery_pack(
     generate_from_path(&crate_dir, &template_path, name)
 }
 
+/// Result of resolving which crates to add from a battery pack.
+pub enum ResolvedAdd {
+    /// Resolved to a concrete set of crates (no interactive picker needed).
+    Crates {
+        active_features: Vec<String>,
+        crates: BTreeMap<String, bphelper_manifest::CrateSpec>,
+    },
+    /// The caller should show the interactive picker.
+    Interactive,
+}
+
+/// Pure resolution logic for `cargo bp add` flags.
+///
+/// Given the battery pack spec and the CLI flags, determines which crates
+/// to install. Returns `ResolvedAdd::Interactive` when the picker should
+/// be shown (no explicit flags, TTY, meaningful choices).
+///
+/// When `specific_crates` is non-empty, unknown crate names are reported
+/// to stderr and skipped; valid ones proceed.
+// [impl cli.add.specific-crates]
+// [impl cli.add.unknown-crate]
+// [impl cli.add.default-crates]
+// [impl cli.add.features]
+// [impl cli.add.no-default-features]
+// [impl cli.add.all-features]
+pub fn resolve_add_crates(
+    bp_spec: &bphelper_manifest::BatteryPackSpec,
+    bp_name: &str,
+    with_features: &[String],
+    no_default_features: bool,
+    all_features: bool,
+    specific_crates: &[String],
+) -> ResolvedAdd {
+    if !specific_crates.is_empty() {
+        // Explicit crate selection — ignores defaults and features.
+        let mut selected = BTreeMap::new();
+        for crate_name_arg in specific_crates {
+            if let Some(spec) = bp_spec.crates.get(crate_name_arg.as_str()) {
+                selected.insert(crate_name_arg.clone(), spec.clone());
+            } else {
+                eprintln!(
+                    "error: crate '{}' not found in battery pack '{}'",
+                    crate_name_arg, bp_name
+                );
+            }
+        }
+        return ResolvedAdd::Crates {
+            active_features: vec![],
+            crates: selected,
+        };
+    }
+
+    if all_features {
+        return ResolvedAdd::Crates {
+            active_features: vec!["all".to_string()],
+            crates: bp_spec.resolve_all(),
+        };
+    }
+
+    // When no explicit flags narrow the selection and the pack has
+    // meaningful choices, signal that the caller may want to show
+    // the interactive picker.
+    if !no_default_features && with_features.is_empty() && bp_spec.has_meaningful_choices() {
+        return ResolvedAdd::Interactive;
+    }
+
+    let mut features = if no_default_features {
+        vec![]
+    } else {
+        vec!["default".to_string()]
+    };
+    features.extend(with_features.iter().cloned());
+
+    // When no features are active (--no-default-features with no -F),
+    // return empty rather than calling resolve_crates(&[]) which
+    // falls back to defaults.
+    if features.is_empty() {
+        return ResolvedAdd::Crates {
+            active_features: features,
+            crates: BTreeMap::new(),
+        };
+    }
+
+    let str_features: Vec<&str> = features.iter().map(|s| s.as_str()).collect();
+    let crates = bp_spec.resolve_crates(&str_features);
+    ResolvedAdd::Crates {
+        active_features: features,
+        crates,
+    }
+}
+
 // [impl cli.add.register]
 // [impl cli.add.dep-kind]
+// [impl cli.add.specific-crates]
+// [impl cli.add.unknown-crate]
 // [impl manifest.register.location]
 // [impl manifest.register.format]
 // [impl manifest.features.storage]
 // [impl manifest.deps.add]
 // [impl manifest.deps.version-features]
-fn add_battery_pack(
+pub fn add_battery_pack(
     name: &str,
     with_features: &[String],
-    all: bool,
+    no_default_features: bool,
+    all_features: bool,
+    specific_crates: &[String],
+    target: Option<AddTarget>,
     path: Option<&str>,
+    project_dir: &Path,
 ) -> Result<()> {
     let crate_name = resolve_crate_name(name);
 
@@ -424,30 +584,33 @@ fn add_battery_pack(
 
     // Step 2: Determine which crates to install — interactive picker, explicit flags, or defaults.
     // No manifest changes have been made yet, so cancellation is free.
-    let use_picker = !all
-        && with_features.is_empty()
-        && std::io::stdout().is_terminal()
-        && bp_spec.has_meaningful_choices();
-
-    // [impl cli.add.default-crates]
-    // [impl cli.add.features]
-    // [impl cli.add.all-features]
-    let (active_features, crates_to_sync) = if all {
-        (vec!["all".to_string()], bp_spec.resolve_all())
-    } else if use_picker {
-        match pick_crates_interactive(&bp_spec)? {
-            Some(result) => (result.active_features, result.crates),
-            None => {
-                println!("Cancelled.");
-                return Ok(());
+    let resolved = resolve_add_crates(
+        &bp_spec,
+        &crate_name,
+        with_features,
+        no_default_features,
+        all_features,
+        specific_crates,
+    );
+    let (active_features, crates_to_sync) = match resolved {
+        ResolvedAdd::Crates {
+            active_features,
+            crates,
+        } => (active_features, crates),
+        ResolvedAdd::Interactive if std::io::stdout().is_terminal() => {
+            match pick_crates_interactive(&bp_spec)? {
+                Some(result) => (result.active_features, result.crates),
+                None => {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
             }
         }
-    } else {
-        let mut features = vec!["default".to_string()];
-        features.extend(with_features.iter().cloned());
-        let str_features: Vec<&str> = features.iter().map(|s| s.as_str()).collect();
-        let crates = bp_spec.resolve_crates(&str_features);
-        (features, crates)
+        ResolvedAdd::Interactive => {
+            // Non-interactive fallback: use defaults
+            let crates = bp_spec.resolve_crates(&["default"]);
+            (vec!["default".to_string()], crates)
+        }
     };
 
     if crates_to_sync.is_empty() {
@@ -456,7 +619,7 @@ fn add_battery_pack(
     }
 
     // Step 3: Now write everything — build-dep, workspace deps, crate deps, metadata.
-    let user_manifest_path = find_user_manifest()?;
+    let user_manifest_path = find_user_manifest(project_dir)?;
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
     // [impl manifest.toml.preserve]
@@ -549,14 +712,43 @@ fn add_battery_pack(
     // [impl manifest.register.location]
     // [impl manifest.register.format]
     // [impl manifest.features.storage]
-    // Record active features in [package.metadata.battery-pack.<crate-name>]
-    let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&crate_name];
+    // [impl cli.add.target]
+    // Record active features — location depends on --target flag
+    let use_workspace_metadata = match target {
+        Some(AddTarget::Workspace) => true,
+        Some(AddTarget::Package) => false,
+        Some(AddTarget::Default) | None => workspace_manifest.is_some(),
+    };
+
     let mut features_array = toml_edit::Array::new();
     for feature in &active_features {
         features_array.push(feature.as_str());
     }
-    *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
-    bp_meta["features"] = toml_edit::value(features_array);
+
+    if use_workspace_metadata {
+        if let Some(ref ws_path) = workspace_manifest {
+            let ws_content =
+                std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
+            let mut ws_doc: toml_edit::DocumentMut = ws_content
+                .parse()
+                .context("Failed to parse workspace Cargo.toml")?;
+            let bp_meta = &mut ws_doc["workspace"]["metadata"]["battery-pack"][&crate_name];
+            *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
+            bp_meta["features"] = toml_edit::value(features_array);
+            std::fs::write(ws_path, ws_doc.to_string())
+                .context("Failed to write workspace Cargo.toml")?;
+        } else {
+            bail!("--target=workspace requires a workspace, but none was found");
+        }
+    } else {
+        // Ensure each intermediate table exists as a proper table (not inline).
+        user_doc["package"]["metadata"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        user_doc["package"]["metadata"]["battery-pack"]
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        let bp_meta = &mut user_doc["package"]["metadata"]["battery-pack"][&crate_name];
+        *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
+        bp_meta["features"] = toml_edit::value(features_array);
+    }
 
     // Write the final Cargo.toml
     // [impl manifest.toml.preserve]
@@ -586,8 +778,8 @@ fn add_battery_pack(
 // [impl cli.sync.add-features]
 // [impl cli.sync.add-crates]
 // [impl cli.sync.non-destructive]
-fn sync_battery_packs() -> Result<()> {
-    let user_manifest_path = find_user_manifest()?;
+fn sync_battery_packs(project_dir: &Path) -> Result<()> {
+    let user_manifest_path = find_user_manifest(project_dir)?;
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
 
@@ -693,8 +885,12 @@ fn sync_battery_packs() -> Result<()> {
     Ok(())
 }
 
-fn enable_feature(feature_name: &str, battery_pack: Option<&str>) -> Result<()> {
-    let user_manifest_path = find_user_manifest()?;
+fn enable_feature(
+    feature_name: &str,
+    battery_pack: Option<&str>,
+    project_dir: &Path,
+) -> Result<()> {
+    let user_manifest_path = find_user_manifest(project_dir)?;
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
 
@@ -921,13 +1117,13 @@ fn pick_crates_interactive(
 // Cargo.toml manipulation helpers
 // ============================================================================
 
-/// Find the user's Cargo.toml in the current directory.
-fn find_user_manifest() -> Result<std::path::PathBuf> {
-    let path = std::path::PathBuf::from("Cargo.toml");
+/// Find the user's Cargo.toml in the given directory.
+fn find_user_manifest(project_dir: &Path) -> Result<std::path::PathBuf> {
+    let path = project_dir.join("Cargo.toml");
     if path.exists() {
         Ok(path)
     } else {
-        bail!("No Cargo.toml found in the current directory");
+        bail!("No Cargo.toml found in {}", project_dir.display());
     }
 }
 
@@ -1533,8 +1729,8 @@ pub struct InstalledPack {
 /// Reads `[build-dependencies]` from the user's Cargo.toml, fetches each
 /// battery pack's spec via cargo metadata, and reads active features from
 /// `package.metadata.battery-pack`.
-pub fn load_installed_packs() -> Result<Vec<InstalledPack>> {
-    let user_manifest_path = find_user_manifest()?;
+pub fn load_installed_packs(project_dir: &Path) -> Result<Vec<InstalledPack>> {
+    let user_manifest_path = find_user_manifest(project_dir)?;
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
 
@@ -1556,8 +1752,18 @@ pub fn load_installed_packs() -> Result<Vec<InstalledPack>> {
     Ok(packs)
 }
 
-/// Fetch battery pack list from crates.io
-pub fn fetch_battery_pack_list(filter: Option<&str>) -> Result<Vec<BatteryPackSummary>> {
+/// Fetch battery pack list, dispatching based on source.
+pub fn fetch_battery_pack_list(
+    source: &CrateSource,
+    filter: Option<&str>,
+) -> Result<Vec<BatteryPackSummary>> {
+    match source {
+        CrateSource::Registry => fetch_battery_pack_list_from_registry(filter),
+        CrateSource::Local(path) => discover_local_battery_packs(path, filter),
+    }
+}
+
+fn fetch_battery_pack_list_from_registry(filter: Option<&str>) -> Result<Vec<BatteryPackSummary>> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("cargo-bp (https://github.com/battery-pack-rs/battery-pack)")
         .build()?;
@@ -1601,10 +1807,45 @@ pub fn fetch_battery_pack_list(filter: Option<&str>) -> Result<Vec<BatteryPackSu
     Ok(battery_packs)
 }
 
-fn print_battery_pack_list(filter: Option<&str>) -> Result<()> {
+// [impl cli.source.discover]
+fn discover_local_battery_packs(
+    workspace_dir: &Path,
+    filter: Option<&str>,
+) -> Result<Vec<BatteryPackSummary>> {
+    let manifest_path = workspace_dir.join("Cargo.toml");
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .manifest_path(&manifest_path)
+        .no_deps()
+        .exec()
+        .with_context(|| format!("Failed to read workspace at {}", manifest_path.display()))?;
+
+    let mut battery_packs: Vec<BatteryPackSummary> = metadata
+        .packages
+        .iter()
+        .filter(|pkg| pkg.name.ends_with("-battery-pack"))
+        .filter(|pkg| {
+            if let Some(q) = filter {
+                short_name(&pkg.name).contains(q)
+            } else {
+                true
+            }
+        })
+        .map(|pkg| BatteryPackSummary {
+            short_name: short_name(&pkg.name).to_string(),
+            name: pkg.name.to_string(),
+            version: pkg.version.to_string(),
+            description: pkg.description.clone().unwrap_or_default(),
+        })
+        .collect();
+
+    battery_packs.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(battery_packs)
+}
+
+fn print_battery_pack_list(source: &CrateSource, filter: Option<&str>) -> Result<()> {
     use console::style;
 
-    let battery_packs = fetch_battery_pack_list(filter)?;
+    let battery_packs = fetch_battery_pack_list(source, filter)?;
 
     if battery_packs.is_empty() {
         match filter {

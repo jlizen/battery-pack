@@ -24,7 +24,7 @@ fn new_name_flag_is_parsed() {
             .expect("--name flag should be accepted");
 
     match cli.command {
-        bphelper_cli::Commands::Bp { command } => match command {
+        bphelper_cli::Commands::Bp { command, .. } => match command {
             bphelper_cli::BpCommands::New { name, .. } => {
                 assert_eq!(name.as_deref(), Some("my-project"));
             }
@@ -42,7 +42,7 @@ fn new_name_short_flag_is_parsed() {
         .expect("-n flag should be accepted");
 
     match cli.command {
-        bphelper_cli::Commands::Bp { command } => match command {
+        bphelper_cli::Commands::Bp { command, .. } => match command {
             bphelper_cli::BpCommands::New { name, .. } => {
                 assert_eq!(name.as_deref(), Some("my-project"));
             }
@@ -65,7 +65,7 @@ fn new_without_name_parses_as_none() {
         .expect("new without --name should parse");
 
     match cli.command {
-        bphelper_cli::Commands::Bp { command } => match command {
+        bphelper_cli::Commands::Bp { command, .. } => match command {
             bphelper_cli::BpCommands::New { name, .. } => {
                 assert!(name.is_none(), "name should be None when --name is omitted");
             }

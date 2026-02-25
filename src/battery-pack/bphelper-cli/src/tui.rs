@@ -1,7 +1,7 @@
 //! Interactive TUI for battery-pack CLI.
 
 use crate::{
-    BatteryPackDetail, BatteryPackSummary, InstalledPack, fetch_battery_pack_detail,
+    BatteryPackDetail, BatteryPackSummary, CrateSource, InstalledPack, fetch_battery_pack_detail,
     fetch_battery_pack_list, load_installed_packs,
 };
 use anyhow::Result;
@@ -21,8 +21,8 @@ use std::time::Duration;
 // ============================================================================
 
 /// Run the TUI starting from the list view
-pub fn run_list(filter: Option<String>) -> Result<()> {
-    let app = App::new_list(filter);
+pub fn run_list(source: CrateSource, filter: Option<String>) -> Result<()> {
+    let app = App::new_list(source, filter);
     app.run()
 }
 
@@ -33,8 +33,8 @@ pub fn run_show(name: &str, path: Option<&str>) -> Result<()> {
 }
 
 /// Run the TUI for interactive dependency management
-pub fn run_add() -> Result<()> {
-    let app = App::new_add();
+pub fn run_add(source: CrateSource) -> Result<()> {
+    let app = App::new_add(source);
     app.run()
 }
 
@@ -43,6 +43,7 @@ pub fn run_add() -> Result<()> {
 // ============================================================================
 
 struct App {
+    source: CrateSource,
     screen: Screen,
     should_quit: bool,
     pending_action: Option<PendingAction>,
@@ -524,8 +525,9 @@ enum PendingAction {
 // ============================================================================
 
 impl App {
-    fn new_list(filter: Option<String>) -> Self {
+    fn new_list(source: CrateSource, filter: Option<String>) -> Self {
         Self {
+            source,
             screen: Screen::Loading(LoadingState {
                 message: "Loading battery packs...".to_string(),
                 target: LoadingTarget::List { filter },
@@ -535,8 +537,9 @@ impl App {
         }
     }
 
-    fn new_add() -> Self {
+    fn new_add(source: CrateSource) -> Self {
         Self {
+            source,
             screen: Screen::Loading(LoadingState {
                 message: "Loading installed battery packs...".to_string(),
                 target: LoadingTarget::Add,
@@ -548,6 +551,7 @@ impl App {
 
     fn new_show(name: &str, path: Option<&str>) -> Self {
         Self {
+            source: CrateSource::Registry,
             screen: Screen::Loading(LoadingState {
                 message: format!("Loading {}...", name),
                 target: LoadingTarget::Detail {
@@ -621,7 +625,7 @@ impl App {
 
         match state.target {
             LoadingTarget::List { filter } => {
-                let items = fetch_battery_pack_list(filter.as_deref())?;
+                let items = fetch_battery_pack_list(&self.source, filter.as_deref())?;
                 let mut list_state = ListState::default();
                 if !items.is_empty() {
                     list_state.select(Some(0));
@@ -649,7 +653,8 @@ impl App {
                 });
             }
             LoadingTarget::Add => {
-                let packs = load_installed_packs()?;
+                let project_dir = std::env::current_dir()?;
+                let packs = load_installed_packs(&project_dir)?;
                 let installed = build_installed_state(packs);
                 self.screen = Screen::Add(AddScreen {
                     tab: AddTab::Installed,
@@ -668,7 +673,7 @@ impl App {
                 mut add_screen,
                 filter,
             } => {
-                let items = fetch_battery_pack_list(filter.as_deref())?;
+                let items = fetch_battery_pack_list(&self.source, filter.as_deref())?;
                 let has_items = !items.is_empty();
                 add_screen.browse.items = items;
                 add_screen.browse.list_state = ListState::default();
