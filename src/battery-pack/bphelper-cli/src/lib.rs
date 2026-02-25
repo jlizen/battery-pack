@@ -655,16 +655,23 @@ pub fn add_battery_pack(
     }
 
     // [impl manifest.deps.workspace]
-    // Add crate dependencies + workspace deps (including the battery pack itself)
-    if let Some(ref ws_path) = workspace_manifest {
+    // Add crate dependencies + workspace deps (including the battery pack itself).
+    // Load workspace doc once; both deps and metadata are written to it before a
+    // single flush at the end (avoids a double read-modify-write).
+    let mut ws_doc: Option<toml_edit::DocumentMut> = if let Some(ref ws_path) = workspace_manifest {
         let ws_content =
             std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
-        // [impl manifest.toml.preserve]
-        let mut ws_doc: toml_edit::DocumentMut = ws_content
-            .parse()
-            .context("Failed to parse workspace Cargo.toml")?;
+        Some(
+            ws_content
+                .parse()
+                .context("Failed to parse workspace Cargo.toml")?,
+        )
+    } else {
+        None
+    };
 
-        let ws_deps = ws_doc["workspace"]["dependencies"]
+    if let Some(ref mut doc) = ws_doc {
+        let ws_deps = doc["workspace"]["dependencies"]
             .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
         if let Some(ws_table) = ws_deps.as_table_mut() {
             // Add the battery pack itself to workspace deps
@@ -683,9 +690,6 @@ pub fn add_battery_pack(
                 add_dep_to_table(ws_table, dep_name, dep_spec);
             }
         }
-        // [impl manifest.toml.preserve]
-        std::fs::write(ws_path, ws_doc.to_string())
-            .context("Failed to write workspace Cargo.toml")?;
 
         // [impl cli.add.dep-kind]
         write_workspace_refs_by_kind(&mut user_doc, &crates_to_sync);
@@ -707,20 +711,13 @@ pub fn add_battery_pack(
     };
 
     if use_workspace_metadata {
-        if let Some(ref ws_path) = workspace_manifest {
-            let ws_content =
-                std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
-            let mut ws_doc: toml_edit::DocumentMut = ws_content
-                .parse()
-                .context("Failed to parse workspace Cargo.toml")?;
+        if let Some(ref mut doc) = ws_doc {
             write_bp_features_to_doc(
-                &mut ws_doc,
+                doc,
                 &["workspace", "metadata"],
                 &crate_name,
                 &active_features,
             );
-            std::fs::write(ws_path, ws_doc.to_string())
-                .context("Failed to write workspace Cargo.toml")?;
         } else {
             bail!("--target=workspace requires a workspace, but none was found");
         }
@@ -731,6 +728,12 @@ pub fn add_battery_pack(
             &crate_name,
             &active_features,
         );
+    }
+
+    // Write workspace Cargo.toml once (deps + metadata combined)
+    if let (Some(ws_path), Some(doc)) = (&workspace_manifest, &ws_doc) {
+        // [impl manifest.toml.preserve]
+        std::fs::write(ws_path, doc.to_string()).context("Failed to write workspace Cargo.toml")?;
     }
 
     // Write the final Cargo.toml
