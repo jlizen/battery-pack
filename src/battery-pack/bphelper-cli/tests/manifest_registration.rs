@@ -26,7 +26,7 @@ fn fixtures_dir() -> PathBuf {
 // [verify manifest.register.location]
 #[test]
 fn register_location_package_metadata() {
-    // Battery pack registrations must be stored in [package.metadata.battery-pack]
+    // Battery pack registrations must be stored in package.metadata.battery-pack
     let manifest = r#"
 [package]
 name = "my-app"
@@ -289,7 +289,7 @@ fn deps_version_features_empty_features_uses_simple_string() {
 }
 
 // ============================================================================
-// manifest.deps.workspace — add to [workspace.dependencies] and reference
+// manifest.deps.workspace — add to workspace.dependencies and reference
 // ============================================================================
 
 // [verify manifest.deps.workspace]

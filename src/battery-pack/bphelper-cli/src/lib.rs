@@ -246,10 +246,10 @@ struct BatteryMetadata {
 }
 
 #[derive(Deserialize)]
-struct TemplateConfig {
-    path: String,
+pub struct TemplateConfig {
+    pub path: String,
     #[serde(default)]
-    description: Option<String>,
+    pub description: Option<String>,
 }
 
 // ============================================================================
@@ -351,6 +351,8 @@ pub struct ExampleInfo {
 // ============================================================================
 
 // [impl cli.new.template]
+// [impl cli.new.name-flag]
+// [impl cli.new.name-prompt]
 // [impl cli.path.flag]
 fn new_from_battery_pack(
     battery_pack: &str,
@@ -989,6 +991,7 @@ fn find_workspace_manifest(crate_manifest: &Path) -> Result<Option<std::path::Pa
 // [impl manifest.deps.add]
 // [impl manifest.deps.version-features]
 // [impl manifest.toml.style]
+// [impl cli.add.idempotent]
 pub fn add_dep_to_table(
     table: &mut toml_edit::Table,
     name: &str,
@@ -1442,7 +1445,8 @@ fn parse_template_metadata(
 }
 
 // [impl format.templates.selection]
-fn resolve_template(
+// [impl cli.new.template-select]
+pub fn resolve_template(
     templates: &BTreeMap<String, TemplateConfig>,
     requested: Option<&str>,
 ) -> Result<String> {
