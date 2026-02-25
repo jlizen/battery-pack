@@ -331,6 +331,23 @@ impl BatteryPackSpec {
             .collect()
     }
 
+    /// Resolve crates for a set of active features, handling the "all" sentinel.
+    ///
+    /// If `active_features` contains `"all"`, returns all visible crates.
+    /// Otherwise delegates to `resolve_crates`.
+    // [impl format.hidden.effect]
+    pub fn resolve_for_features(
+        &self,
+        active_features: &BTreeSet<String>,
+    ) -> BTreeMap<String, CrateSpec> {
+        if active_features.iter().any(|s| s == "all") {
+            self.resolve_all_visible()
+        } else {
+            let str_features: Vec<&str> = active_features.iter().map(|s| s.as_str()).collect();
+            self.resolve_crates(&str_features)
+        }
+    }
+
     /// Check whether a crate name matches the hidden patterns.
     // [impl format.hidden.effect]
     pub fn is_hidden(&self, crate_name: &str) -> bool {

@@ -434,13 +434,7 @@ fn build_installed_state(packs: Vec<InstalledPack>) -> InstalledState {
         .map(|pack| {
             let grouped = pack.spec.all_crates_with_grouping();
             // [impl format.hidden.effect]
-            let resolved = if pack.active_features.iter().any(|s| s == "all") {
-                pack.spec.resolve_all_visible()
-            } else {
-                let str_features: Vec<&str> =
-                    pack.active_features.iter().map(|s| s.as_str()).collect();
-                pack.spec.resolve_crates(&str_features)
-            };
+            let resolved = pack.spec.resolve_for_features(&pack.active_features);
 
             let entries = grouped
                 .into_iter()

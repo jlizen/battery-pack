@@ -155,6 +155,9 @@ pub enum BpCommands {
         non_interactive: bool,
     },
 
+    /// Show status of installed battery packs and version warnings
+    Status,
+
     /// Validate that the current battery pack is well-formed
     Validate {
         /// Path to the battery pack crate (defaults to current directory)
@@ -255,6 +258,7 @@ pub fn main() -> Result<()> {
                         print_battery_pack_detail(&battery_pack, path.as_deref(), &source)
                     }
                 }
+                BpCommands::Status => status_battery_packs(&project_dir),
                 BpCommands::Validate { path } => validate_battery_pack_cmd(path.as_deref()),
             }
         }
@@ -780,12 +784,7 @@ fn sync_battery_packs(project_dir: &Path) -> Result<()> {
             read_active_features_from(&metadata_location, &user_manifest_content, bp_name);
 
         // [impl format.hidden.effect]
-        let expected = if active_features.iter().any(|s| s == "all") {
-            bp_spec.resolve_all_visible()
-        } else {
-            let str_features: Vec<&str> = active_features.iter().map(|s| s.as_str()).collect();
-            bp_spec.resolve_crates(&str_features)
-        };
+        let expected = bp_spec.resolve_for_features(&active_features);
 
         // [impl manifest.deps.workspace]
         // Sync each crate
@@ -2448,6 +2447,196 @@ fn find_template_path(tree: &[String], template_path: &str) -> Option<String> {
     tree.iter()
         .find(|path| path.ends_with(template_path))
         .cloned()
+}
+
+// ============================================================================
+// Status command
+// ============================================================================
+
+// [impl cli.status.list]
+// [impl cli.status.version-warn]
+// [impl cli.status.newer-ok]
+// [impl cli.status.no-project]
+fn status_battery_packs(project_dir: &Path) -> Result<()> {
+    use console::style;
+
+    // [impl cli.status.no-project]
+    let user_manifest_path =
+        find_user_manifest(project_dir).context("are you inside a Rust project?")?;
+    let user_manifest_content =
+        std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
+
+    // Inline the load_installed_packs logic to avoid re-reading the manifest.
+    let bp_names = find_installed_bp_names(&user_manifest_content)?;
+    let metadata_location = resolve_metadata_location(&user_manifest_path)?;
+    let packs: Vec<InstalledPack> = bp_names
+        .into_iter()
+        .map(|bp_name| {
+            let spec = fetch_battery_pack_spec(&bp_name)?;
+            let active_features =
+                read_active_features_from(&metadata_location, &user_manifest_content, &bp_name);
+            Ok(InstalledPack {
+                short_name: short_name(&bp_name).to_string(),
+                version: spec.version.clone(),
+                spec,
+                name: bp_name,
+                active_features,
+            })
+        })
+        .collect::<Result<_>>()?;
+
+    if packs.is_empty() {
+        println!("No battery packs installed.");
+        return Ok(());
+    }
+
+    // Build a map of the user's actual dependency versions so we can compare.
+    let user_versions = collect_user_dep_versions(&user_manifest_path, &user_manifest_content)?;
+
+    let mut any_warnings = false;
+
+    for pack in &packs {
+        // [impl cli.status.list]
+        println!(
+            "{} ({})",
+            style(&pack.short_name).bold(),
+            style(&pack.version).dim(),
+        );
+
+        // Resolve which crates are expected for this pack's active features.
+        let expected = pack.spec.resolve_for_features(&pack.active_features);
+
+        let mut pack_warnings = Vec::new();
+        for (dep_name, dep_spec) in &expected {
+            if dep_spec.version.is_empty() {
+                continue;
+            }
+            if let Some(user_version) = user_versions.get(dep_name.as_str()) {
+                // [impl cli.status.version-warn]
+                // [impl cli.status.newer-ok]
+                if should_upgrade_version(user_version, &dep_spec.version) {
+                    pack_warnings.push((
+                        dep_name.as_str(),
+                        user_version.as_str(),
+                        dep_spec.version.as_str(),
+                    ));
+                }
+            }
+        }
+
+        if pack_warnings.is_empty() {
+            println!("  {} all dependencies up to date", style("✓").green());
+        } else {
+            any_warnings = true;
+            for (dep, current, recommended) in &pack_warnings {
+                println!(
+                    "  {} {}: {} → {} recommended",
+                    style("⚠").yellow(),
+                    dep,
+                    style(current).red(),
+                    style(recommended).green(),
+                );
+            }
+        }
+    }
+
+    if any_warnings {
+        println!();
+        println!("Run {} to update.", style("cargo bp sync").bold());
+    }
+
+    Ok(())
+}
+
+/// Collect the user's actual dependency versions from Cargo.toml (and workspace deps if applicable).
+///
+/// Returns a map of `crate_name → version_string`.
+pub fn collect_user_dep_versions(
+    user_manifest_path: &Path,
+    user_manifest_content: &str,
+) -> Result<BTreeMap<String, String>> {
+    let raw: toml::Value =
+        toml::from_str(user_manifest_content).context("Failed to parse Cargo.toml")?;
+
+    let mut versions = BTreeMap::new();
+
+    // Read workspace dependency versions (if applicable).
+    let ws_versions = if let Some(ws_path) = find_workspace_manifest(user_manifest_path)? {
+        let ws_content =
+            std::fs::read_to_string(&ws_path).context("Failed to read workspace Cargo.toml")?;
+        let ws_raw: toml::Value =
+            toml::from_str(&ws_content).context("Failed to parse workspace Cargo.toml")?;
+        extract_versions_from_table(
+            ws_raw
+                .get("workspace")
+                .and_then(|w| w.get("dependencies"))
+                .and_then(|d| d.as_table()),
+        )
+    } else {
+        BTreeMap::new()
+    };
+
+    // Collect from each dependency section.
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        let table = raw.get(section).and_then(|d| d.as_table());
+        let Some(table) = table else { continue };
+        for (name, value) in table {
+            if versions.contains_key(name) {
+                continue; // first section wins
+            }
+            if let Some(version) = extract_version_from_dep(value) {
+                versions.insert(name.clone(), version);
+            } else if is_workspace_ref(value) {
+                // Resolve from workspace deps.
+                if let Some(ws_ver) = ws_versions.get(name) {
+                    versions.insert(name.clone(), ws_ver.clone());
+                }
+            }
+        }
+    }
+
+    Ok(versions)
+}
+
+/// Extract version strings from a TOML dependency table.
+fn extract_versions_from_table(
+    table: Option<&toml::map::Map<String, toml::Value>>,
+) -> BTreeMap<String, String> {
+    let Some(table) = table else {
+        return BTreeMap::new();
+    };
+    let mut versions = BTreeMap::new();
+    for (name, value) in table {
+        if let Some(version) = extract_version_from_dep(value) {
+            versions.insert(name.clone(), version);
+        }
+    }
+    versions
+}
+
+/// Extract the version string from a single dependency value.
+///
+/// Handles both `crate = "1.0"` and `crate = { version = "1.0", ... }`.
+fn extract_version_from_dep(value: &toml::Value) -> Option<String> {
+    match value {
+        toml::Value::String(s) => Some(s.clone()),
+        toml::Value::Table(t) => t
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
+/// Check if a dependency entry is a workspace reference (`{ workspace = true }`).
+fn is_workspace_ref(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::Table(t) => t
+            .get("workspace")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        _ => false,
+    }
 }
 
 // ============================================================================
