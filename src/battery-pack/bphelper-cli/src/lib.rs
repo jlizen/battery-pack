@@ -1298,7 +1298,7 @@ pub fn sync_dep_in_table(
                 let patched = bphelper_manifest::CrateSpec {
                     version: keep_version,
                     features: spec.features.clone(),
-                    dep_kind: spec.dep_kind.clone(),
+                    dep_kind: spec.dep_kind,
                     optional: spec.optional,
                 };
                 add_dep_to_table(table, name, &patched);
@@ -1331,9 +1331,11 @@ pub fn sync_dep_in_table(
 
                 let mut needs_update = false;
                 // [impl manifest.sync.no-feature-remove]
+                let existing_set: BTreeSet<&str> =
+                    existing_features.iter().map(|s| s.as_str()).collect();
                 let mut all_features = existing_features.clone();
                 for feat in &spec.features {
-                    if !existing_features.contains(feat) {
+                    if !existing_set.contains(feat.as_str()) {
                         all_features.push(feat.clone());
                         needs_update = true;
                     }
