@@ -7,8 +7,8 @@ keywords = ["battery-pack"]
 
 [dependencies]
 # These are the curated crates — they become regular deps for users
-anyhow = "1"
-thiserror = "2"
+anyhow = { version = "1", optional = true }
+thiserror = { version = "2", optional = true }
 eyre = { version = "0.6", optional = true }
 
 [features]
