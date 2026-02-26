@@ -246,13 +246,38 @@ pub fn generate_docs() -> Result<(), Error> {
     let out_dir = std::env::var("OUT_DIR")
         .map_err(|_| Error::Metadata("OUT_DIR not set — must be called from build.rs".into()))?;
 
+    // Fetch crate descriptions via cargo metadata.
+    // [impl docgen.helper.crate-table-metadata]
+    let descriptions = fetch_crate_descriptions()?;
+
+    generate_docs_from_dir(&manifest_dir, &out_dir, &descriptions)?;
+
+    // Set up cargo rebuild triggers.
+    println!("cargo:rerun-if-changed={manifest_dir}/Cargo.toml");
+    println!("cargo:rerun-if-changed={manifest_dir}/docs.handlebars.md");
+    println!("cargo:rerun-if-changed={manifest_dir}/README.md");
+
+    Ok(())
+}
+
+/// Generate documentation from a specific directory with pre-fetched descriptions.
+///
+/// Reads Cargo.toml, `docs.handlebars.md`, and `README.md` from `manifest_dir`,
+/// then writes `docs.md` to `out_dir`.
+// [impl docgen.build.trigger]
+// [impl docgen.build.template]
+pub fn generate_docs_from_dir(
+    manifest_dir: &str,
+    out_dir: &str,
+    descriptions: &BTreeMap<String, String>,
+) -> Result<(), Error> {
     let manifest_path = format!("{manifest_dir}/Cargo.toml");
     let template_path = format!("{manifest_dir}/docs.handlebars.md");
     let readme_path = format!("{manifest_dir}/README.md");
 
     // Parse the battery pack manifest.
     let manifest_str = std::fs::read_to_string(&manifest_path).map_err(|e| Error::Io {
-        path: manifest_path.clone(),
+        path: manifest_path,
         source: e,
     })?;
     let spec = bphelper_manifest::parse_battery_pack(&manifest_str)
@@ -260,19 +285,15 @@ pub fn generate_docs() -> Result<(), Error> {
 
     // Read the template.
     let template = std::fs::read_to_string(&template_path).map_err(|e| Error::Io {
-        path: template_path.clone(),
+        path: template_path,
         source: e,
     })?;
 
     // Read README (optional — empty string if missing).
     let readme = std::fs::read_to_string(&readme_path).unwrap_or_default();
 
-    // Fetch crate descriptions via cargo metadata.
-    // [impl docgen.helper.crate-table-metadata]
-    let descriptions = fetch_crate_descriptions()?;
-
     // Build context and render.
-    let context = build_context(&spec, &descriptions, &readme);
+    let context = build_context(&spec, descriptions, &readme);
     let output = render_docs(&template, &context)?;
 
     // Write output.
@@ -281,11 +302,6 @@ pub fn generate_docs() -> Result<(), Error> {
         path: output_path,
         source: e,
     })?;
-
-    // Set up cargo rebuild triggers.
-    println!("cargo:rerun-if-changed={manifest_path}");
-    println!("cargo:rerun-if-changed={template_path}");
-    println!("cargo:rerun-if-changed={readme_path}");
 
     Ok(())
 }
@@ -648,6 +664,52 @@ mod tests {
         .assert_eq(&output);
     }
 
+    // ================================================================
+    // True-by-construction rule verification
+    // ================================================================
+
+    #[test]
+    // [verify docgen.build.lib-include]
+    fn test_template_lib_rs_includes_generated_docs() {
+        // True by construction: the `cargo bp new` template emits a lib.rs
+        // containing `#![doc = include_str!(concat!(env!("OUT_DIR"), "/docs.md"))]`.
+        // This test verifies the template file contains the expected directive.
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("templates/default/src/lib.rs");
+        let content = std::fs::read_to_string(&template_dir).unwrap();
+        assert!(
+            content.contains(r#"include_str!(concat!(env!("OUT_DIR"), "/docs.md"))"#),
+            "template lib.rs must include generated docs from OUT_DIR"
+        );
+    }
+
+    #[test]
+    // [verify docgen.helper.crate-table-update]
+    fn test_crate_table_update_is_automatic() {
+        // Documentation-only test. The spec says updating bphelper must
+        // automatically update table rendering for all battery packs.
+        // This is true by construction: `{{crate-table}}` is a Handlebars
+        // helper registered at runtime by `render_docs()` in this crate.
+        // Battery packs call `generate_docs()` → `render_docs()`, so
+        // updating this crate updates the helper for all consumers. No
+        // per-battery-pack code generation is involved. This architectural
+        // invariant cannot be meaningfully unit-tested — the test below
+        // merely confirms the helper is registered (already covered by
+        // test_render_crate_table).
+        let ctx = simple_context();
+        let output = render_docs("{{crate-table}}", &ctx).unwrap();
+        assert!(
+            output.contains("| Crate |"),
+            "crate-table helper must be registered"
+        );
+    }
+
+    // ================================================================
+    // Full pipeline tests (parse fixture → build context → render)
+    // ================================================================
+
     #[test]
     // [verify docgen.template.handlebars]
     // [verify docgen.hidden.excluded]
@@ -669,5 +731,149 @@ mod tests {
         // Dev-deps should also appear
         assert!(output.contains("[assert_cmd]"));
         assert!(output.contains("[predicates]"));
+    }
+
+    // ================================================================
+    // I/O integration tests (generate_docs_from_dir)
+    // ================================================================
+
+    /// Set up a tempdir with a battery pack's Cargo.toml, template, and README.
+    fn setup_docgen_dir(manifest: &str, template: &str, readme: Option<&str>) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), manifest).unwrap();
+        std::fs::write(dir.path().join("docs.handlebars.md"), template).unwrap();
+        if let Some(readme) = readme {
+            std::fs::write(dir.path().join("README.md"), readme).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    // [verify docgen.build.trigger]
+    fn test_generate_docs_writes_output_file() {
+        let fixture = fixtures_dir().join("basic-battery-pack/Cargo.toml");
+        let manifest = std::fs::read_to_string(&fixture).unwrap();
+        let dir = setup_docgen_dir(&manifest, "{{readme}}\n\n{{crate-table}}", Some("# Hello"));
+
+        let out_dir = tempfile::tempdir().unwrap();
+        let descriptions = mock_descriptions();
+
+        generate_docs_from_dir(
+            dir.path().to_str().unwrap(),
+            out_dir.path().to_str().unwrap(),
+            &descriptions,
+        )
+        .unwrap();
+
+        let output_path = out_dir.path().join("docs.md");
+        assert!(output_path.exists(), "docs.md must be written to out_dir");
+
+        let content = std::fs::read_to_string(&output_path).unwrap();
+        assert!(
+            content.contains("# Hello"),
+            "output must contain rendered readme"
+        );
+        assert!(
+            content.contains("[anyhow]"),
+            "output must contain crate table"
+        );
+    }
+
+    #[test]
+    // [verify docgen.build.template]
+    fn test_generate_docs_reads_template_from_manifest_dir() {
+        let fixture = fixtures_dir().join("basic-battery-pack/Cargo.toml");
+        let manifest = std::fs::read_to_string(&fixture).unwrap();
+
+        // Custom template — only uses package name, no readme or crate table.
+        let dir = setup_docgen_dir(
+            &manifest,
+            "# Docs for {{package.name}}",
+            Some("ignored readme"),
+        );
+
+        let out_dir = tempfile::tempdir().unwrap();
+        let descriptions = mock_descriptions();
+
+        generate_docs_from_dir(
+            dir.path().to_str().unwrap(),
+            out_dir.path().to_str().unwrap(),
+            &descriptions,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(out_dir.path().join("docs.md")).unwrap();
+        assert_eq!(content, "# Docs for basic-battery-pack");
+    }
+
+    #[test]
+    fn test_generate_docs_missing_template_errors() {
+        let fixture = fixtures_dir().join("basic-battery-pack/Cargo.toml");
+        let manifest = std::fs::read_to_string(&fixture).unwrap();
+
+        // Set up dir with Cargo.toml but NO template file.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), &manifest).unwrap();
+
+        let out_dir = tempfile::tempdir().unwrap();
+        let descriptions = mock_descriptions();
+
+        let result = generate_docs_from_dir(
+            dir.path().to_str().unwrap(),
+            out_dir.path().to_str().unwrap(),
+            &descriptions,
+        );
+
+        assert!(result.is_err(), "missing template must produce an error");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("docs.handlebars.md"),
+            "error must mention the template file: {err}"
+        );
+    }
+
+    #[test]
+    fn test_generate_docs_readme_optional() {
+        let fixture = fixtures_dir().join("basic-battery-pack/Cargo.toml");
+        let manifest = std::fs::read_to_string(&fixture).unwrap();
+
+        // No README — should still succeed with empty readme in context.
+        let dir = setup_docgen_dir(&manifest, "readme=[{{readme}}]", None);
+
+        let out_dir = tempfile::tempdir().unwrap();
+        let descriptions = mock_descriptions();
+
+        generate_docs_from_dir(
+            dir.path().to_str().unwrap(),
+            out_dir.path().to_str().unwrap(),
+            &descriptions,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(out_dir.path().join("docs.md")).unwrap();
+        assert_eq!(
+            content, "readme=[]",
+            "missing README should produce empty string"
+        );
+    }
+
+    #[test]
+    // [verify docgen.helper.crate-table-metadata]
+    fn test_fetch_crate_descriptions_returns_workspace_packages() {
+        // This test calls the real cargo metadata against our workspace.
+        // It verifies that fetch_crate_descriptions() returns descriptions
+        // for packages that exist in the workspace.
+        let descriptions = fetch_crate_descriptions().unwrap();
+
+        // bphelper-build is in our workspace and has a description.
+        assert!(
+            descriptions.contains_key("bphelper-build"),
+            "must include workspace package bphelper-build"
+        );
+        assert!(
+            descriptions["bphelper-build"].contains("documentation generation"),
+            "description must match Cargo.toml: {:?}",
+            descriptions["bphelper-build"]
+        );
     }
 }
