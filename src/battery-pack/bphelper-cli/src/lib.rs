@@ -53,7 +53,7 @@ pub enum Commands {
         crate_source: Option<PathBuf>,
 
         #[command(subcommand)]
-        command: BpCommands,
+        command: Option<BpCommands>,
     },
 }
 
@@ -119,7 +119,12 @@ pub enum BpCommands {
     },
 
     /// Update dependencies from installed battery packs
-    Sync,
+    Sync {
+        // [impl cli.path.subcommands]
+        /// Use a local path instead of downloading from crates.io
+        #[arg(long)]
+        path: Option<String>,
+    },
 
     /// Enable a named feature from a battery pack
     Enable {
@@ -156,7 +161,12 @@ pub enum BpCommands {
     },
 
     /// Show status of installed battery packs and version warnings
-    Status,
+    Status {
+        // [impl cli.path.subcommands]
+        /// Use a local path instead of downloading from crates.io
+        #[arg(long)]
+        path: Option<String>,
+    },
 
     /// Validate that the current battery pack is well-formed
     Validate {
@@ -181,6 +191,7 @@ pub enum AddTarget {
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let interactive = std::io::stdout().is_terminal();
 
     match cli.command {
         Commands::Bp {
@@ -190,6 +201,16 @@ pub fn main() -> Result<()> {
             let source = match crate_source {
                 Some(path) => CrateSource::Local(path),
                 None => CrateSource::Registry,
+            };
+            // [impl cli.bare.tui]
+            let Some(command) = command else {
+                if interactive {
+                    return tui::run_add(source);
+                } else {
+                    bail!(
+                        "No subcommand specified. Use `cargo bp --help` or run interactively in a terminal."
+                    );
+                }
             };
             match command {
                 BpCommands::New {
@@ -218,15 +239,16 @@ pub fn main() -> Result<()> {
                         &source,
                         &project_dir,
                     ),
-                    // [impl cli.bare.tui]
-                    None if std::io::stdout().is_terminal() => tui::run_add(source),
+                    None if interactive => tui::run_add(source),
                     None => {
                         bail!(
                             "No battery pack specified. Use `cargo bp add <name>` or run interactively in a terminal."
                         )
                     }
                 },
-                BpCommands::Sync => sync_battery_packs(&project_dir),
+                BpCommands::Sync { path } => {
+                    sync_battery_packs(&project_dir, path.as_deref(), &source)
+                }
                 BpCommands::Enable {
                     feature_name,
                     battery_pack,
@@ -237,7 +259,7 @@ pub fn main() -> Result<()> {
                 } => {
                     // [impl cli.list.interactive]
                     // [impl cli.list.non-interactive]
-                    if !non_interactive && std::io::stdout().is_terminal() {
+                    if !non_interactive && interactive {
                         tui::run_list(source, filter)
                     } else {
                         // [impl cli.list.query]
@@ -252,13 +274,15 @@ pub fn main() -> Result<()> {
                 } => {
                     // [impl cli.show.interactive]
                     // [impl cli.show.non-interactive]
-                    if !non_interactive && std::io::stdout().is_terminal() {
+                    if !non_interactive && interactive {
                         tui::run_show(&battery_pack, path.as_deref(), source)
                     } else {
                         print_battery_pack_detail(&battery_pack, path.as_deref(), &source)
                     }
                 }
-                BpCommands::Status => status_battery_packs(&project_dir),
+                BpCommands::Status { path } => {
+                    status_battery_packs(&project_dir, path.as_deref(), &source)
+                }
                 BpCommands::Validate { path } => validate_battery_pack_cmd(path.as_deref()),
             }
         }
@@ -759,7 +783,9 @@ pub fn add_battery_pack(
 // [impl cli.sync.update-versions]
 // [impl cli.sync.add-features]
 // [impl cli.sync.add-crates]
-fn sync_battery_packs(project_dir: &Path) -> Result<()> {
+// [impl cli.source.subcommands]
+// [impl cli.path.subcommands]
+fn sync_battery_packs(project_dir: &Path, path: Option<&str>, source: &CrateSource) -> Result<()> {
     let user_manifest_path = find_user_manifest(project_dir)?;
     let user_manifest_content =
         std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
@@ -782,7 +808,7 @@ fn sync_battery_packs(project_dir: &Path) -> Result<()> {
 
     for bp_name in &bp_names {
         // Get the battery pack spec
-        let bp_spec = fetch_battery_pack_spec(bp_name)?;
+        let bp_spec = load_installed_bp_spec(bp_name, path, source)?;
 
         // Read active features from the correct metadata location
         let active_features =
@@ -1561,6 +1587,35 @@ fn resolve_battery_pack_manifest(bp_name: &str) -> Result<std::path::PathBuf> {
         })?;
 
     Ok(package.manifest_path.clone().into())
+}
+
+/// Fetch battery pack spec, respecting `--path` and `--crate-source`.
+///
+/// - `--path` loads directly from the given directory (no name resolution).
+/// - `--crate-source` resolves the name within the local workspace.
+/// - Default (Registry) uses `cargo metadata` to find the already-installed crate.
+// [impl cli.path.flag]
+// [impl cli.path.no-resolve]
+// [impl cli.source.replace]
+fn load_installed_bp_spec(
+    bp_name: &str,
+    path: Option<&str>,
+    source: &CrateSource,
+) -> Result<bphelper_manifest::BatteryPackSpec> {
+    if let Some(local_path) = path {
+        let manifest_path = Path::new(local_path).join("Cargo.toml");
+        let manifest_content = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+        return bphelper_manifest::parse_battery_pack(&manifest_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse battery pack '{}': {}", bp_name, e));
+    }
+    match source {
+        CrateSource::Registry => fetch_battery_pack_spec(bp_name),
+        CrateSource::Local(_) => {
+            let (_version, spec) = fetch_bp_spec(source, bp_name)?;
+            Ok(spec)
+        }
+    }
 }
 
 /// Fetch the battery pack spec using `cargo metadata` to locate the manifest.
@@ -2491,7 +2546,9 @@ fn find_template_path(tree: &[String], template_path: &str) -> Option<String> {
 // [impl cli.status.list]
 // [impl cli.status.version-warn]
 // [impl cli.status.no-project]
-fn status_battery_packs(project_dir: &Path) -> Result<()> {
+// [impl cli.source.subcommands]
+// [impl cli.path.subcommands]
+fn status_battery_packs(project_dir: &Path, path: Option<&str>, source: &CrateSource) -> Result<()> {
     use console::style;
 
     // [impl cli.status.no-project]
@@ -2506,7 +2563,7 @@ fn status_battery_packs(project_dir: &Path) -> Result<()> {
     let packs: Vec<InstalledPack> = bp_names
         .into_iter()
         .map(|bp_name| {
-            let spec = fetch_battery_pack_spec(&bp_name)?;
+            let spec = load_installed_bp_spec(&bp_name, path, source)?;
             let active_features =
                 read_active_features_from(&metadata_location, &user_manifest_content, &bp_name);
             Ok(InstalledPack {

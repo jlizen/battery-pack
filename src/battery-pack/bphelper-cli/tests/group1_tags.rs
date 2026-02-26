@@ -5,9 +5,35 @@
 //!   - cli.new.name-flag      — --name flag is accepted and parsed
 //!   - cli.new.name-prompt    — omitting --name still parses (cargo-generate prompts)
 //!   - cli.new.template-select — multiple templates with no default triggers prompt path
+//!   - cli.bare.tui           — bare `cargo bp` produces command: None
 //!   - cli.add.idempotent     — re-adding same dep doesn't create duplicates
 
+use clap::Parser;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Unwrap `Commands::Bp { command }` → `Option<BpCommands>`.
+fn unwrap_bp_command(cli: bphelper_cli::Cli) -> Option<bphelper_cli::BpCommands> {
+    match cli.command {
+        bphelper_cli::Commands::Bp { command, .. } => command,
+    }
+}
+
+// ============================================================================
+// cli.bare.tui — bare `cargo bp` produces command: None (→ TUI or bail)
+// ============================================================================
+
+// [verify cli.bare.tui]
+#[test]
+fn bare_cargo_bp_produces_none_command() {
+    // `cargo bp` with no subcommand should parse successfully with command = None.
+    // At runtime, main() uses this to launch the TUI (if terminal) or bail.
+    let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp"])
+        .expect("bare `cargo bp` should parse");
+    assert!(
+        unwrap_bp_command(cli).is_none(),
+        "bare `cargo bp` should produce command: None"
+    );
+}
 
 // ============================================================================
 // cli.new.name-flag — --name flag is accepted by the `new` subcommand
@@ -18,18 +44,16 @@ use std::collections::{BTreeMap, BTreeSet};
 fn new_name_flag_is_parsed() {
     // `cargo bp new cli --name my-project` should parse successfully
     // with the name captured as Some("my-project").
-    use clap::Parser;
     let cli =
         bphelper_cli::Cli::try_parse_from(["cargo", "bp", "new", "cli", "--name", "my-project"])
             .expect("--name flag should be accepted");
 
-    match cli.command {
-        bphelper_cli::Commands::Bp { command, .. } => match command {
-            bphelper_cli::BpCommands::New { name, .. } => {
-                assert_eq!(name.as_deref(), Some("my-project"));
-            }
-            other => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
-        },
+    match unwrap_bp_command(cli) {
+        Some(bphelper_cli::BpCommands::New { name, .. }) => {
+            assert_eq!(name.as_deref(), Some("my-project"));
+        }
+        None => panic!("expected Some(New), got None"),
+        Some(other) => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
@@ -37,17 +61,15 @@ fn new_name_flag_is_parsed() {
 #[test]
 fn new_name_short_flag_is_parsed() {
     // `-n` is the short form of `--name`
-    use clap::Parser;
     let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "new", "cli", "-n", "my-project"])
         .expect("-n flag should be accepted");
 
-    match cli.command {
-        bphelper_cli::Commands::Bp { command, .. } => match command {
-            bphelper_cli::BpCommands::New { name, .. } => {
-                assert_eq!(name.as_deref(), Some("my-project"));
-            }
-            other => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
-        },
+    match unwrap_bp_command(cli) {
+        Some(bphelper_cli::BpCommands::New { name, .. }) => {
+            assert_eq!(name.as_deref(), Some("my-project"));
+        }
+        None => panic!("expected Some(New), got None"),
+        Some(other) => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
@@ -60,17 +82,15 @@ fn new_name_short_flag_is_parsed() {
 fn new_without_name_parses_as_none() {
     // `cargo bp new cli` without --name should parse successfully with name = None.
     // The actual prompting is handled by cargo-generate at runtime.
-    use clap::Parser;
     let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "new", "cli"])
         .expect("new without --name should parse");
 
-    match cli.command {
-        bphelper_cli::Commands::Bp { command, .. } => match command {
-            bphelper_cli::BpCommands::New { name, .. } => {
-                assert!(name.is_none(), "name should be None when --name is omitted");
-            }
-            other => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
-        },
+    match unwrap_bp_command(cli) {
+        Some(bphelper_cli::BpCommands::New { name, .. }) => {
+            assert!(name.is_none(), "name should be None when --name is omitted");
+        }
+        None => panic!("expected Some(New), got None"),
+        Some(other) => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
     }
 }
 

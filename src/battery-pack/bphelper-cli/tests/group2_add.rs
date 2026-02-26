@@ -10,6 +10,7 @@
 //!   - cli.add.target            — --target={workspace,package,default}
 //!   - cli.add.unknown-crate     — error for unknown crate, valid ones proceed
 
+use clap::Parser;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -50,6 +51,51 @@ fn unwrap_resolved(resolved: bphelper_cli::ResolvedAdd) -> (BTreeSet<String>, BT
     }
 }
 
+/// Unwrap `Commands::Bp { command }` → `Option<BpCommands>`.
+fn unwrap_bp_command(cli: bphelper_cli::Cli) -> Option<bphelper_cli::BpCommands> {
+    match cli.command {
+        bphelper_cli::Commands::Bp { command, .. } => command,
+    }
+}
+
+/// Parsed `Add` fields. Exhaustive destructure so new fields cause a compile error.
+struct ParsedAdd {
+    battery_pack: Option<String>,
+    crates: Vec<String>,
+    features: Vec<String>,
+    no_default_features: bool,
+    all_features: bool,
+    target: Option<bphelper_cli::AddTarget>,
+    path: Option<String>,
+}
+
+/// Parse args as `cargo bp add ...` and return all Add fields.
+fn parse_add_command(args: &[&str]) -> ParsedAdd {
+    let cli = bphelper_cli::Cli::try_parse_from(args)
+        .unwrap_or_else(|e| panic!("parse failed for {args:?}: {e}"));
+    match unwrap_bp_command(cli) {
+        Some(bphelper_cli::BpCommands::Add {
+            battery_pack,
+            crates,
+            features,
+            no_default_features,
+            all_features,
+            target,
+            path,
+        }) => ParsedAdd {
+            battery_pack,
+            crates,
+            features,
+            no_default_features,
+            all_features,
+            target,
+            path,
+        },
+        None => panic!("expected Some(Add), got None"),
+        Some(other) => panic!("expected Add, got {:?}", std::mem::discriminant(&other)),
+    }
+}
+
 // ============================================================================
 // cli.add.features — -F/--features flag parsing
 // ============================================================================
@@ -57,48 +103,20 @@ fn unwrap_resolved(resolved: bphelper_cli::ResolvedAdd) -> (BTreeSet<String>, BT
 // [verify cli.add.features]
 #[test]
 fn features_long_flag_parsed() {
-    use clap::Parser;
-    let cli = bphelper_cli::Cli::try_parse_from([
-        "cargo",
-        "bp",
-        "add",
-        "cli",
-        "--features",
-        "indicators",
-    ])
-    .expect("--features flag should be accepted");
-
-    match cli.command {
-        bphelper_cli::Commands::Bp { command, .. } => match command {
-            bphelper_cli::BpCommands::Add { features, .. } => {
-                assert_eq!(features, vec!["indicators"]);
-            }
-            other => panic!("expected Add, got {:?}", std::mem::discriminant(&other)),
-        },
-    }
+    let add = parse_add_command(&["cargo", "bp", "add", "cli", "--features", "indicators"]);
+    assert_eq!(add.features, vec!["indicators"]);
 }
 
 // [verify cli.add.features]
 #[test]
 fn features_short_flag_parsed() {
-    use clap::Parser;
-    let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "add", "cli", "-F", "indicators"])
-        .expect("-F flag should be accepted");
-
-    match cli.command {
-        bphelper_cli::Commands::Bp { command, .. } => match command {
-            bphelper_cli::BpCommands::Add { features, .. } => {
-                assert_eq!(features, vec!["indicators"]);
-            }
-            other => panic!("expected Add, got {:?}", std::mem::discriminant(&other)),
-        },
-    }
+    let add = parse_add_command(&["cargo", "bp", "add", "cli", "-F", "indicators"]);
+    assert_eq!(add.features, vec!["indicators"]);
 }
 
 // [verify cli.add.features]
 #[test]
 fn features_old_with_flag_rejected() {
-    use clap::Parser;
     let result =
         bphelper_cli::Cli::try_parse_from(["cargo", "bp", "add", "cli", "--with", "indicators"]);
     assert!(result.is_err(), "old --with flag should be rejected");
@@ -111,45 +129,17 @@ fn features_old_with_flag_rejected() {
 // [verify cli.add.features-multiple]
 #[test]
 fn features_comma_separated() {
-    use clap::Parser;
-    let cli =
-        bphelper_cli::Cli::try_parse_from(["cargo", "bp", "add", "cli", "-F", "indicators,fancy"])
-            .unwrap();
-
-    match cli.command {
-        bphelper_cli::Commands::Bp { command, .. } => match command {
-            bphelper_cli::BpCommands::Add { features, .. } => {
-                assert_eq!(features, vec!["indicators", "fancy"]);
-            }
-            other => panic!("expected Add, got {:?}", std::mem::discriminant(&other)),
-        },
-    }
+    let add = parse_add_command(&["cargo", "bp", "add", "cli", "-F", "indicators,fancy"]);
+    assert_eq!(add.features, vec!["indicators", "fancy"]);
 }
 
 // [verify cli.add.features-multiple]
 #[test]
 fn features_repeated_flag() {
-    use clap::Parser;
-    let cli = bphelper_cli::Cli::try_parse_from([
-        "cargo",
-        "bp",
-        "add",
-        "cli",
-        "-F",
-        "indicators",
-        "-F",
-        "fancy",
-    ])
-    .unwrap();
-
-    match cli.command {
-        bphelper_cli::Commands::Bp { command, .. } => match command {
-            bphelper_cli::BpCommands::Add { features, .. } => {
-                assert_eq!(features, vec!["indicators", "fancy"]);
-            }
-            other => panic!("expected Add, got {:?}", std::mem::discriminant(&other)),
-        },
-    }
+    let add = parse_add_command(&[
+        "cargo", "bp", "add", "cli", "-F", "indicators", "-F", "fancy",
+    ]);
+    assert_eq!(add.features, vec!["indicators", "fancy"]);
 }
 
 // ============================================================================
@@ -370,18 +360,8 @@ fn resolve_all_features_basic() {
 // [verify cli.add.specific-crates]
 #[test]
 fn specific_crates_parsed() {
-    use clap::Parser;
-    let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "add", "cli", "clap", "dialoguer"])
-        .unwrap();
-
-    match cli.command {
-        bphelper_cli::Commands::Bp { command, .. } => match command {
-            bphelper_cli::BpCommands::Add { crates, .. } => {
-                assert_eq!(crates, vec!["clap", "dialoguer"]);
-            }
-            other => panic!("expected Add, got {:?}", std::mem::discriminant(&other)),
-        },
-    }
+    let add = parse_add_command(&["cargo", "bp", "add", "cli", "clap", "dialoguer"]);
+    assert_eq!(add.crates, vec!["clap", "dialoguer"]);
 }
 
 // [verify cli.add.specific-crates]
@@ -484,47 +464,26 @@ fn resolve_all_unknown_crates_yields_empty() {
 // [verify cli.add.target]
 #[test]
 fn target_values_parsed() {
-    use clap::Parser;
-
     for (arg, expected) in [
         ("workspace", bphelper_cli::AddTarget::Workspace),
         ("package", bphelper_cli::AddTarget::Package),
         ("default", bphelper_cli::AddTarget::Default),
     ] {
-        let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "add", "cli", "--target", arg])
-            .unwrap_or_else(|e| panic!("--target {arg} should parse: {e}"));
-
-        match cli.command {
-            bphelper_cli::Commands::Bp { command, .. } => match command {
-                bphelper_cli::BpCommands::Add { target, .. } => {
-                    assert_eq!(target, Some(expected), "for --target {arg}");
-                }
-                _ => panic!("expected Add"),
-            },
-        }
+        let add = parse_add_command(&["cargo", "bp", "add", "cli", "--target", arg]);
+        assert_eq!(add.target, Some(expected), "for --target {arg}");
     }
 }
 
 // [verify cli.add.target]
 #[test]
 fn target_omitted_is_none() {
-    use clap::Parser;
-    let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "add", "cli"]).unwrap();
-
-    match cli.command {
-        bphelper_cli::Commands::Bp { command, .. } => match command {
-            bphelper_cli::BpCommands::Add { target, .. } => {
-                assert!(target.is_none());
-            }
-            _ => panic!("expected Add"),
-        },
-    }
+    let add = parse_add_command(&["cargo", "bp", "add", "cli"]);
+    assert!(add.target.is_none());
 }
 
 // [verify cli.add.target]
 #[test]
 fn target_invalid_value_rejected() {
-    use clap::Parser;
     let result =
         bphelper_cli::Cli::try_parse_from(["cargo", "bp", "add", "cli", "--target", "invalid"]);
     assert!(result.is_err());
