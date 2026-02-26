@@ -180,6 +180,19 @@ fn wrapping_nav(index: &mut usize, count: usize, forward: bool) {
     }
 }
 
+/// Clamped (non-wrapping) movement on a `ListState` within `0..count`.
+fn list_nav(state: &mut ListState, count: usize, forward: bool) {
+    if let Some(selected) = state.selected() {
+        if forward {
+            if selected < count.saturating_sub(1) {
+                state.select(Some(selected + 1));
+            }
+        } else if selected > 0 {
+            state.select(Some(selected - 1));
+        }
+    }
+}
+
 impl DetailScreen {
     /// Get the total count of selectable items without building the full vector.
     /// This is more efficient for navigation operations that only need the count.
@@ -1101,20 +1114,12 @@ impl App {
             Action::Quit => self.should_quit = true,
             Action::ListUp => {
                 if let Screen::List(state) = &mut self.screen {
-                    if let Some(selected) = state.list_state.selected() {
-                        if selected > 0 {
-                            state.list_state.select(Some(selected - 1));
-                        }
-                    }
+                    list_nav(&mut state.list_state, state.items.len(), false);
                 }
             }
             Action::ListDown => {
                 if let Screen::List(state) = &mut self.screen {
-                    if let Some(selected) = state.list_state.selected() {
-                        if selected < state.items.len().saturating_sub(1) {
-                            state.list_state.select(Some(selected + 1));
-                        }
-                    }
+                    list_nav(&mut state.list_state, state.items.len(), true);
                 }
             }
             Action::ListSelect(selected) => {
@@ -1411,18 +1416,10 @@ impl App {
                 } else {
                     match key {
                         KeyCode::Up | KeyCode::Char('k') => {
-                            if let Some(selected) = state.browse.list_state.selected() {
-                                if selected > 0 {
-                                    state.browse.list_state.select(Some(selected - 1));
-                                }
-                            }
+                            list_nav(&mut state.browse.list_state, state.browse.items.len(), false);
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
-                            if let Some(selected) = state.browse.list_state.selected() {
-                                if selected < state.browse.items.len().saturating_sub(1) {
-                                    state.browse.list_state.select(Some(selected + 1));
-                                }
-                            }
+                            list_nav(&mut state.browse.list_state, state.browse.items.len(), true);
                         }
                         KeyCode::Enter => {
                             if let Some(selected) = state.browse.list_state.selected() {
