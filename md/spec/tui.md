@@ -76,7 +76,8 @@ templates, and examples.
 r[tui.browse.add]
 The user MUST be able to add a battery pack from the browse view.
 When adding, the TUI MUST show a selection screen with
-default crates pre-checked (based on the `default` feature).
+default crates pre-checked (based on the `default` feature),
+excluding hidden dependencies.
 
 r[tui.browse.hidden]
 Hidden dependencies MUST NOT appear when browsing a battery pack's

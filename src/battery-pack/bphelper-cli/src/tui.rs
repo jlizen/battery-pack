@@ -209,46 +209,33 @@ impl DetailScreen {
             + 3 // actions: OpenCratesIo, AddToProject, NewProject
     }
 
-    /// Build a list of all selectable items in order
-    fn selectable_items(&self) -> Vec<DetailItem> {
-        let mut items = Vec::with_capacity(self.item_count());
+    /// Iterate over all selectable items in order.
+    fn selectable_items(&self) -> impl Iterator<Item = DetailItem> + '_ {
+        let crates = self.detail.crates.iter().cloned().map(DetailItem::Crate);
+        let extends = self.detail.extends.iter().cloned().map(DetailItem::Extends);
+        let templates = self.detail.templates.iter().map(|t| DetailItem::Template {
+            _path: t.path.clone(),
+            repo_path: t.repo_path.clone(),
+        });
+        let examples = self.detail.examples.iter().map(|e| DetailItem::Example {
+            _name: e.name.clone(),
+            repo_path: e.repo_path.clone(),
+        });
+        let actions = [
+            DetailItem::ActionOpenCratesIo,
+            DetailItem::ActionAddToProject,
+            DetailItem::ActionNewProject,
+        ];
 
-        // Crates
-        for crate_name in &self.detail.crates {
-            items.push(DetailItem::Crate(crate_name.clone()));
-        }
-
-        // Extends (other battery packs)
-        for extends in &self.detail.extends {
-            items.push(DetailItem::Extends(extends.clone()));
-        }
-
-        // Templates
-        for tmpl in &self.detail.templates {
-            items.push(DetailItem::Template {
-                _path: tmpl.path.clone(),
-                repo_path: tmpl.repo_path.clone(),
-            });
-        }
-
-        // Examples
-        for example in &self.detail.examples {
-            items.push(DetailItem::Example {
-                _name: example.name.clone(),
-                repo_path: example.repo_path.clone(),
-            });
-        }
-
-        // Actions (always present)
-        items.push(DetailItem::ActionOpenCratesIo);
-        items.push(DetailItem::ActionAddToProject);
-        items.push(DetailItem::ActionNewProject);
-
-        items
+        crates
+            .chain(extends)
+            .chain(templates)
+            .chain(examples)
+            .chain(actions)
     }
 
     fn selected_item(&self) -> Option<DetailItem> {
-        self.selectable_items().get(self.selected_index).cloned()
+        self.selectable_items().nth(self.selected_index)
     }
 
     fn select_next(&mut self) {
@@ -1643,7 +1630,7 @@ fn render_detail(frame: &mut Frame, state: &DetailScreen) {
     frame.render_widget(Paragraph::new(header_text).centered(), header);
 
     // Build selectable items to track indices
-    let selectable_items = state.selectable_items();
+    let selectable_items: Vec<_> = state.selectable_items().collect();
 
     // Info section
     let mut lines: Vec<Line> = Vec::new();
@@ -1763,6 +1750,33 @@ fn render_detail(frame: &mut Frame, state: &DetailScreen) {
     );
 }
 
+fn render_form_field(
+    frame: &mut Frame,
+    label: &str,
+    value: &str,
+    focused: bool,
+    label_area: Rect,
+    input_area: Rect,
+) {
+    frame.render_widget(
+        Paragraph::new(label).style(Style::default().bold()),
+        label_area,
+    );
+    let border_style = if focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    frame.render_widget(
+        Paragraph::new(value).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style),
+        ),
+        input_area,
+    );
+}
+
 fn render_form(frame: &mut Frame, state: &FormScreen) {
     // First render detail view dimmed underneath
     let dimmed_detail = DetailScreen {
@@ -1797,43 +1811,20 @@ fn render_form(frame: &mut Frame, state: &FormScreen) {
     ])
     .areas(inner);
 
-    // Directory field
-    frame.render_widget(
-        Paragraph::new("Directory:").style(Style::default().bold()),
+    render_form_field(
+        frame,
+        "Directory:",
+        &state.directory,
+        state.focused_field == FormField::Directory,
         dir_label,
-    );
-
-    let dir_style = if state.focused_field == FormField::Directory {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    frame.render_widget(
-        Paragraph::new(state.directory.as_str()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(dir_style),
-        ),
         dir_input,
     );
-
-    // Project name field
-    frame.render_widget(
-        Paragraph::new("Project Name:").style(Style::default().bold()),
+    render_form_field(
+        frame,
+        "Project Name:",
+        &state.project_name,
+        state.focused_field == FormField::ProjectName,
         name_label,
-    );
-
-    let name_style = if state.focused_field == FormField::ProjectName {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    frame.render_widget(
-        Paragraph::new(state.project_name.as_str()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(name_style),
-        ),
         name_input,
     );
 
@@ -2006,6 +1997,7 @@ fn render_pack_entries<'a>(
         }
 
         let is_selected = (entry_offset + i) == selected_index;
+        // [impl tui.installed.show-state]
         let checkbox = if entry.enabled { "[x]" } else { "[ ]" };
 
         let changed = show_changes && entry.enabled != entry.originally_enabled;
@@ -2830,7 +2822,7 @@ mod tests {
             came_from_list: false,
         };
 
-        let items = screen.selectable_items();
+        let items: Vec<_> = screen.selectable_items().collect();
         assert_eq!(screen.item_count(), items.len());
 
         expect![[r#"
@@ -3066,6 +3058,20 @@ mod tests {
         }
     }
 
+    fn unwrap_list_screen(app: &App) -> &ListScreen {
+        match &app.screen {
+            Screen::List(state) => state,
+            _ => panic!("Expected List screen"),
+        }
+    }
+
+    fn unwrap_detail_screen(app: &App) -> &DetailScreen {
+        match &app.screen {
+            Screen::Detail(state) => state,
+            _ => panic!("Expected Detail screen"),
+        }
+    }
+
     /// [verify tui.installed.show-state]
     #[test]
     fn build_installed_state_partial_features() {
@@ -3128,18 +3134,10 @@ mod tests {
         }));
 
         app.handle_key(KeyCode::Char('j')); // down
-        if let Screen::List(state) = &app.screen {
-            assert_eq!(state.list_state.selected(), Some(1));
-        } else {
-            panic!("Expected List screen");
-        }
+        assert_eq!(unwrap_list_screen(&app).list_state.selected(), Some(1));
 
         app.handle_key(KeyCode::Char('k')); // back up
-        if let Screen::List(state) = &app.screen {
-            assert_eq!(state.list_state.selected(), Some(0));
-        } else {
-            panic!("Expected List screen");
-        }
+        assert_eq!(unwrap_list_screen(&app).list_state.selected(), Some(0));
     }
 
     /// [verify tui.nav.keyboard]
@@ -3186,27 +3184,15 @@ mod tests {
 
         // Tab moves forward
         app.handle_key(KeyCode::Tab);
-        if let Screen::Detail(state) = &app.screen {
-            assert_eq!(state.selected_index, 1);
-        } else {
-            panic!("Expected Detail screen");
-        }
+        assert_eq!(unwrap_detail_screen(&app).selected_index, 1);
 
         // Down arrow also moves forward
         app.handle_key(KeyCode::Down);
-        if let Screen::Detail(state) = &app.screen {
-            assert_eq!(state.selected_index, 2);
-        } else {
-            panic!("Expected Detail screen");
-        }
+        assert_eq!(unwrap_detail_screen(&app).selected_index, 2);
 
         // Up arrow moves back
         app.handle_key(KeyCode::Up);
-        if let Screen::Detail(state) = &app.screen {
-            assert_eq!(state.selected_index, 1);
-        } else {
-            panic!("Expected Detail screen");
-        }
+        assert_eq!(unwrap_detail_screen(&app).selected_index, 1);
     }
 
     /// [verify tui.nav.keyboard]
@@ -3457,28 +3443,28 @@ mod tests {
     // Tier 3: Rendering tests
     // ====================================================================
 
-    /// Helper: render an AddScreen into an in-memory terminal and return the
-    /// buffer content as a string (one line per row, padded with spaces).
-    fn render_add_to_string(state: &mut AddScreen, width: u16, height: u16) -> String {
+    /// Helper: render into an in-memory terminal and return the buffer content
+    /// as a string (one line per row, padded with spaces).
+    fn render_to_string(
+        width: u16,
+        height: u16,
+        draw: impl FnOnce(&mut Frame),
+    ) -> String {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_add(frame, state)).unwrap();
+        terminal.draw(draw).unwrap();
         terminal.backend().to_string()
     }
 
-    /// Helper: render a ListScreen into an in-memory terminal and return the
-    /// buffer content as a string.
-    fn render_list_to_string(state: &mut ListScreen, width: u16, height: u16) -> String {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
+    fn render_add_to_string(state: &mut AddScreen, width: u16, height: u16) -> String {
+        render_to_string(width, height, |frame| render_add(frame, state))
+    }
 
-        let backend = TestBackend::new(width, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_list(frame, state)).unwrap();
-        terminal.backend().to_string()
+    fn render_list_to_string(state: &mut ListScreen, width: u16, height: u16) -> String {
+        render_to_string(width, height, |frame| render_list(frame, state))
     }
 
     /// [verify tui.main.no-project] (partial: tests empty-state message, not greyed-out styling)
@@ -3604,16 +3590,8 @@ mod tests {
     // Coverage completion: main, network, new rules
     // ====================================================================
 
-    /// Helper: render an App into an in-memory terminal and return the
-    /// buffer content as a string.
     fn render_app_to_string(app: &mut App, width: u16, height: u16) -> String {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let backend = TestBackend::new(width, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| app.render(frame)).unwrap();
-        terminal.backend().to_string()
+        render_to_string(width, height, |frame| app.render(frame))
     }
 
     /// [verify tui.main.sections]
