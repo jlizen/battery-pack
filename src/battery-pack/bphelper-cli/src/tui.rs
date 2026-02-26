@@ -193,6 +193,11 @@ fn list_nav(state: &mut ListState, count: usize, forward: bool) {
     }
 }
 
+fn wait_for_enter() {
+    println!("\nPress Enter to return to TUI...");
+    let _ = std::io::stdin().read_line(&mut String::new());
+}
+
 impl DetailScreen {
     /// Get the total count of selectable items without building the full vector.
     /// This is more efficient for navigation operations that only need the count.
@@ -891,8 +896,7 @@ impl App {
                 if let Err(e) = open::that(url) {
                     println!("Failed to open browser: {}", e);
                     println!("URL: {}", url);
-                    println!("\nPress Enter to return to TUI...");
-                    let _ = std::io::stdin().read_line(&mut String::new());
+                    wait_for_enter();
                 }
                 // No "press enter" for successful open - just return immediately
             }
@@ -904,8 +908,7 @@ impl App {
                 if status.success() {
                     println!("\nSuccessfully added {}!", battery_pack);
                 }
-                println!("\nPress Enter to return to TUI...");
-                let _ = std::io::stdin().read_line(&mut String::new());
+                wait_for_enter();
             }
             PendingAction::NewProject {
                 battery_pack,
@@ -923,8 +926,7 @@ impl App {
                 if status.success() {
                     println!("\nSuccessfully created project '{}'!", name);
                 }
-                println!("\nPress Enter to return to TUI...");
-                let _ = std::io::stdin().read_line(&mut String::new());
+                wait_for_enter();
             }
         }
         Ok(())
