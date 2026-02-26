@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["battery-pack"]
 
-[dependencies]
+[build-dependencies]
 battery-pack = "0.4"
 
 [dev-dependencies]
@@ -15,10 +15,11 @@ battery-pack = "0.4"
 # clap = { version = "4", features = ["derive"] }
 # serde = { version = "1", features = ["derive"] }
 
-# Optional: narrow the default set and define named sets
-# [package.metadata.battery-pack]
+# Optional: narrow the default set and define named features
+# [features]
 # default = ["clap", "serde"]
-#
-# [package.metadata.battery-pack.sets]
-# json = { serde_json = {} }
-# fancy = { clap = { features = ["color"] } }
+# json = ["serde_json"]
+
+# Optional: hide internal dependencies from users
+# [package.metadata.battery-pack]
+# hidden = ["serde*"]

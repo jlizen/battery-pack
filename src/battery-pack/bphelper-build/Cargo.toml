@@ -1,0 +1,18 @@
+[package]
+name = "bphelper-build"
+version = "0.4.1"
+edition = "2024"
+description = "Build-time documentation generation for battery packs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/battery-pack-rs/battery-pack"
+keywords = ["battery-pack"]
+
+[dependencies]
+bphelper-manifest = { path = "../bphelper-manifest", version = "0.4.1" }
+handlebars.workspace = true
+cargo_metadata.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+expect-test.workspace = true

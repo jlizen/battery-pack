@@ -2,31 +2,45 @@
 //!
 //! Battery packs are curated collections of crates that work well together.
 //! The CLI (`cargo bp`) syncs real dependencies into your Cargo.toml,
-//! and this library provides build-time validation to detect drift.
+//! and this library provides build-time documentation generation and
+//! drift validation.
 //!
 //! # For Battery Pack Authors
 //!
-//! Your lib.rs should look like this:
-//!
-//! ```rust,ignore
-//! const SELF_MANIFEST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
-//!
-//! pub fn validate() {
-//!     battery_pack::validate(SELF_MANIFEST);
-//! }
-//! ```
-//!
-//! # For Battery Pack Users
-//!
-//! Your build.rs should call validate:
+//! Your `build.rs` generates documentation:
 //!
 //! ```rust,ignore
 //! fn main() {
-//!     cli_battery_pack::validate();
+//!     battery_pack::build::generate_docs().unwrap();
 //! }
+//! ```
+//!
+//! Your `lib.rs` includes the generated docs:
+//!
+//! ```rust,ignore
+//! #![doc = include_str!(concat!(env!("OUT_DIR"), "/docs.md"))]
 //! ```
 
 pub use bphelper_manifest::{BatteryPackSpec, CrateSpec, DepKind};
+
+/// Build-time documentation generation.
+///
+/// Use from your battery pack's `build.rs`:
+///
+/// ```rust,ignore
+/// fn main() {
+///     battery_pack::build::generate_docs().unwrap();
+/// }
+/// ```
+///
+/// See the [docgen spec](https://battery-pack-rs.github.io/battery-pack/spec/docgen.html)
+/// for details on templates and helpers.
+pub mod build {
+    pub use bphelper_build::{
+        CrateEntry, DocsContext, Error, FeatureEntry, PackageInfo, build_context, generate_docs,
+        render_docs,
+    };
+}
 
 /// Validate that the calling crate's dependencies match a battery pack's specs.
 ///
