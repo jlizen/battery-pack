@@ -6,6 +6,7 @@ use crate::{
 };
 use anyhow::Result;
 use bphelper_manifest::DepKind;
+use std::collections::{BTreeMap, BTreeSet};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     Frame,
@@ -54,12 +55,14 @@ struct App {
 #[derive(Debug)]
 struct CrateChange {
     name: String,
+    dep_kind: DepKind,
 }
 
 impl From<&CrateEntry> for CrateChange {
     fn from(entry: &CrateEntry) -> Self {
         Self {
             name: entry.name.clone(),
+            dep_kind: entry.dep_kind,
         }
     }
 }
@@ -300,6 +303,33 @@ struct InstalledPackState {
     short_name: String,
     version: String,
     entries: Vec<CrateEntry>,
+    /// Feature→crate mapping from the battery pack spec, used to enforce
+    /// the constraint that a crate can't be disabled if another enabled
+    /// feature requires it.
+    features: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl InstalledPackState {
+    /// Returns true if the given crate is required by a feature other than its own group
+    /// that has at least one other enabled crate.
+    fn is_required_by_other_feature(&self, crate_name: &str, crate_group: &str) -> bool {
+        for (feature_name, crate_set) in &self.features {
+            if feature_name == crate_group {
+                continue; // Skip the crate's own feature group
+            }
+            if !crate_set.contains(crate_name) {
+                continue; // This feature doesn't include the crate
+            }
+            // This feature includes the crate — check if it has other enabled crates
+            let has_other_enabled = self.entries.iter().any(|e| {
+                e.enabled && e.name != crate_name && crate_set.contains(&e.name)
+            });
+            if has_other_enabled {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[derive(Clone)]
@@ -308,6 +338,7 @@ struct CrateEntry {
     version: String,
     features: Vec<String>,
     dep_kind: DepKind,
+    original_dep_kind: DepKind,
     group: String,
     enabled: bool,
     originally_enabled: bool,
@@ -370,12 +401,49 @@ impl InstalledState {
     }
 
     /// Toggle the currently selected crate's enabled state.
+    /// Refuses to disable a crate that is required by another enabled feature.
+    // [impl tui.installed.toggle-crate]
     fn toggle_selected(&mut self) {
+        // Find which pack and entry index the selected_index points to.
+        let mut flat = 0;
+        let mut target = None;
+        for (pi, pack) in self.packs.iter().enumerate() {
+            for ei in 0..pack.entries.len() {
+                if flat == self.selected_index {
+                    target = Some((pi, ei));
+                    break;
+                }
+                flat += 1;
+            }
+            if target.is_some() {
+                break;
+            }
+        }
+
+        let Some((pi, ei)) = target else { return };
+        let pack = &self.packs[pi];
+        let entry = &pack.entries[ei];
+
+        // When disabling, check the constraint.
+        if entry.enabled && pack.is_required_by_other_feature(&entry.name, &entry.group) {
+            return;
+        }
+
+        self.packs[pi].entries[ei].enabled = !self.packs[pi].entries[ei].enabled;
+    }
+
+    /// Cycle the currently selected crate's dep_kind: Normal → Dev → Build → Normal.
+    // [impl tui.installed.dep-kind]
+    fn cycle_dep_kind(&mut self) {
         let mut idx = 0;
         for pack in &mut self.packs {
             for entry in &mut pack.entries {
                 if idx == self.selected_index {
-                    entry.enabled = !entry.enabled;
+                    entry.dep_kind = match entry.dep_kind {
+                        DepKind::Normal => DepKind::Dev,
+                        DepKind::Dev => DepKind::Build,
+                        DepKind::Build => DepKind::Normal,
+                    };
                     return;
                 }
                 idx += 1;
@@ -383,12 +451,12 @@ impl InstalledState {
         }
     }
 
-    /// Returns true if any crate's enabled state differs from its original.
+    /// Returns true if any crate's enabled/dep_kind state differs from its original.
     fn has_changes(&self) -> bool {
         self.packs
             .iter()
             .flat_map(|p| &p.entries)
-            .any(|e| e.enabled != e.originally_enabled)
+            .any(|e| e.enabled != e.originally_enabled || e.dep_kind != e.original_dep_kind)
     }
 
     /// Returns true if any pack was added from Browse (all entries have originally_enabled=false).
@@ -481,6 +549,7 @@ fn build_installed_state(packs: Vec<InstalledPack>) -> InstalledState {
                         version: dep.version.clone(),
                         features: dep.features.iter().cloned().collect(),
                         dep_kind: dep.dep_kind,
+                        original_dep_kind: dep.dep_kind,
                         group,
                         enabled: is_enabled,
                         originally_enabled: is_enabled,
@@ -493,6 +562,7 @@ fn build_installed_state(packs: Vec<InstalledPack>) -> InstalledState {
                 short_name: pack.short_name,
                 version: pack.version,
                 entries,
+                features: pack.spec.features.clone(),
             }
         })
         .collect();
@@ -516,6 +586,7 @@ fn build_expanded_pack(
             version: dep.version.clone(),
             features: dep.features.iter().cloned().collect(),
             dep_kind: dep.dep_kind,
+            original_dep_kind: dep.dep_kind,
             group,
             enabled: is_default,
             originally_enabled: false, // new pack, nothing was originally enabled
@@ -528,6 +599,7 @@ fn build_expanded_pack(
             short_name: detail.short_name.clone(),
             version: detail.version.clone(),
             entries,
+            features: spec.features,
         },
         selected_index: 0,
     }
@@ -1171,6 +1243,7 @@ impl App {
                 KeyCode::Up | KeyCode::Char('k') => state.installed.select_prev(),
                 KeyCode::Down | KeyCode::Char('j') => state.installed.select_next(),
                 KeyCode::Char(' ') => state.installed.toggle_selected(),
+                KeyCode::Char('d') => state.installed.cycle_dep_kind(),
                 KeyCode::Tab => {
                     if state.browse.items.is_empty() {
                         // First visit — load browse list via loading screen
@@ -2058,6 +2131,7 @@ mod tests {
             short_name: name.to_string(),
             version: "1.0.0".to_string(),
             entries,
+            features: BTreeMap::new(),
         }
     }
 
@@ -2068,6 +2142,7 @@ mod tests {
             version: "0.1.0".to_string(),
             features: Vec::new(),
             dep_kind: DepKind::Normal,
+            original_dep_kind: DepKind::Normal,
             group: "default".to_string(),
             enabled,
             originally_enabled,
@@ -2127,6 +2202,7 @@ mod tests {
             version: "1.0.0".to_string(),
             features: Vec::new(),
             dep_kind: DepKind::Normal,
+            original_dep_kind: DepKind::Normal,
             group: "default".to_string(),
             enabled: true,
             originally_enabled: true,
@@ -2142,6 +2218,7 @@ mod tests {
             version: "1.0.0".to_string(),
             features: vec!["derive".to_string(), "std".to_string()],
             dep_kind: DepKind::Normal,
+            original_dep_kind: DepKind::Normal,
             group: "default".to_string(),
             enabled: true,
             originally_enabled: true,
@@ -2158,6 +2235,7 @@ mod tests {
             version: "1.0.0".to_string(),
             features: Vec::new(),
             dep_kind: DepKind::Dev,
+            original_dep_kind: DepKind::Dev,
             group: "default".to_string(),
             enabled: true,
             originally_enabled: true,
@@ -2174,6 +2252,7 @@ mod tests {
             version: "1.0.0".to_string(),
             features: vec!["parallel".to_string()],
             dep_kind: DepKind::Build,
+            original_dep_kind: DepKind::Build,
             group: "default".to_string(),
             enabled: true,
             originally_enabled: true,
@@ -2244,6 +2323,7 @@ mod tests {
                     version: "0.7.0".to_string(),
                     features: Vec::new(),
                     dep_kind: DepKind::Normal,
+                    original_dep_kind: DepKind::Normal,
                     group: "server".to_string(),
                     enabled: true,
                     originally_enabled: true,
@@ -2253,6 +2333,7 @@ mod tests {
                     version: "0.12.0".to_string(),
                     features: Vec::new(),
                     dep_kind: DepKind::Normal,
+                    original_dep_kind: DepKind::Normal,
                     group: "client".to_string(),
                     enabled: true,
                     originally_enabled: true,
@@ -2265,6 +2346,172 @@ mod tests {
         state.toggle_selected();
         assert!(!state.packs[0].entries[0].enabled); // axum off
         assert!(state.packs[0].entries[1].enabled); // reqwest (client) unchanged
+    }
+
+    // --- toggle constraint: feature dependencies ---
+
+    /// [verify tui.installed.toggle-crate]
+    #[test]
+    fn toggle_off_prevented_when_required_by_other_feature() {
+        // "axum" is in group "server" but also listed in the "networking" feature.
+        // "reqwest" is in group "client" and also in "networking".
+        // With both enabled and "networking" feature defined, disabling either
+        // should be prevented because the other keeps "networking" active.
+        let mut pack = make_installed_pack(
+            "web",
+            vec![
+                CrateEntry {
+                    name: "axum".to_string(),
+                    version: "0.7.0".to_string(),
+                    features: Vec::new(),
+                    dep_kind: DepKind::Normal,
+                    original_dep_kind: DepKind::Normal,
+                    group: "server".to_string(),
+                    enabled: true,
+                    originally_enabled: true,
+                },
+                CrateEntry {
+                    name: "reqwest".to_string(),
+                    version: "0.12.0".to_string(),
+                    features: Vec::new(),
+                    dep_kind: DepKind::Normal,
+                    original_dep_kind: DepKind::Normal,
+                    group: "client".to_string(),
+                    enabled: true,
+                    originally_enabled: true,
+                },
+            ],
+        );
+        // Both crates are in the "networking" feature
+        pack.features.insert(
+            "networking".to_string(),
+            BTreeSet::from(["axum".to_string(), "reqwest".to_string()]),
+        );
+
+        let mut state = make_installed(vec![pack]);
+
+        // Try to toggle off axum — should be prevented (reqwest keeps "networking" active)
+        state.selected_index = 0;
+        state.toggle_selected();
+        assert!(state.packs[0].entries[0].enabled); // still enabled
+
+        // Try to toggle off reqwest — should also be prevented
+        state.selected_index = 1;
+        state.toggle_selected();
+        assert!(state.packs[0].entries[1].enabled); // still enabled
+    }
+
+    /// [verify tui.installed.toggle-crate]
+    #[test]
+    fn toggle_off_allowed_when_no_cross_feature_dependency() {
+        // Crate in its own group with no cross-feature memberships.
+        let mut state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![make_entry("axum", true, true)],
+        )]);
+
+        state.toggle_selected();
+        assert!(!state.packs[0].entries[0].enabled); // toggled off successfully
+    }
+
+    /// [verify tui.installed.toggle-crate]
+    #[test]
+    fn toggle_on_always_allowed_even_with_features() {
+        // Enabling a crate is always allowed, regardless of feature constraints.
+        let mut pack = make_installed_pack(
+            "web",
+            vec![
+                CrateEntry {
+                    name: "axum".to_string(),
+                    version: "0.7.0".to_string(),
+                    features: Vec::new(),
+                    dep_kind: DepKind::Normal,
+                    original_dep_kind: DepKind::Normal,
+                    group: "server".to_string(),
+                    enabled: false,
+                    originally_enabled: false,
+                },
+                CrateEntry {
+                    name: "reqwest".to_string(),
+                    version: "0.12.0".to_string(),
+                    features: Vec::new(),
+                    dep_kind: DepKind::Normal,
+                    original_dep_kind: DepKind::Normal,
+                    group: "client".to_string(),
+                    enabled: true,
+                    originally_enabled: true,
+                },
+            ],
+        );
+        pack.features.insert(
+            "networking".to_string(),
+            BTreeSet::from(["axum".to_string(), "reqwest".to_string()]),
+        );
+
+        let mut state = make_installed(vec![pack]);
+
+        // Toggle axum ON — should always succeed
+        state.selected_index = 0;
+        state.toggle_selected();
+        assert!(state.packs[0].entries[0].enabled);
+    }
+
+    // --- dep_kind cycling ---
+
+    /// [verify tui.installed.dep-kind]
+    #[test]
+    fn cycle_dep_kind_cycles_through_all_variants() {
+        let mut state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![make_entry("axum", true, true)],
+        )]);
+
+        assert_eq!(state.packs[0].entries[0].dep_kind, DepKind::Normal);
+
+        state.cycle_dep_kind();
+        assert_eq!(state.packs[0].entries[0].dep_kind, DepKind::Dev);
+
+        state.cycle_dep_kind();
+        assert_eq!(state.packs[0].entries[0].dep_kind, DepKind::Build);
+
+        state.cycle_dep_kind();
+        assert_eq!(state.packs[0].entries[0].dep_kind, DepKind::Normal);
+    }
+
+    /// [verify tui.installed.dep-kind]
+    #[test]
+    fn cycle_dep_kind_targets_selected_entry() {
+        let mut state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, true),
+                make_entry("tower", true, true),
+            ],
+        )]);
+
+        // Cycle second entry
+        state.selected_index = 1;
+        state.cycle_dep_kind();
+        assert_eq!(state.packs[0].entries[0].dep_kind, DepKind::Normal); // axum unchanged
+        assert_eq!(state.packs[0].entries[1].dep_kind, DepKind::Dev); // tower cycled
+    }
+
+    /// [verify tui.installed.dep-kind]
+    #[test]
+    fn dep_kind_change_detected_by_has_changes() {
+        let mut state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![make_entry("axum", true, true)],
+        )]);
+
+        assert!(!state.has_changes());
+        state.cycle_dep_kind();
+        assert!(state.has_changes());
+
+        // Cycle back to original — no longer a change
+        state.cycle_dep_kind(); // Dev -> Build
+        state.cycle_dep_kind(); // Build -> Normal
+        assert!(!state.has_changes());
     }
 
     // --- InstalledState navigation ---
@@ -2362,9 +2609,11 @@ mod tests {
                     crates: [
                         CrateChange {
                             name: "axum",
+                            dep_kind: Normal,
                         },
                         CrateChange {
                             name: "tower",
+                            dep_kind: Normal,
                         },
                     ],
                 },
@@ -2393,6 +2642,7 @@ mod tests {
                     add_crates: [
                         CrateChange {
                             name: "reqwest",
+                            dep_kind: Normal,
                         },
                     ],
                     remove_crates: [
