@@ -370,6 +370,25 @@ struct CrateEntry {
 }
 
 impl CrateEntry {
+    fn new(
+        group: String,
+        name: String,
+        dep: &bphelper_manifest::CrateSpec,
+        enabled: bool,
+        originally_enabled: bool,
+    ) -> Self {
+        Self {
+            name,
+            version: dep.version.clone(),
+            features: dep.features.iter().cloned().collect(),
+            dep_kind: dep.dep_kind,
+            original_dep_kind: dep.dep_kind,
+            group,
+            enabled,
+            originally_enabled,
+        }
+    }
+
     fn version_info(&self) -> String {
         // [impl tui.installed.show-state]
         let kind_label = match self.dep_kind {
@@ -569,16 +588,7 @@ fn build_installed_state(packs: Vec<InstalledPack>) -> InstalledState {
                 .into_iter()
                 .map(|(group, crate_name, dep, _is_default)| {
                     let is_enabled = resolved.contains_key(&crate_name);
-                    CrateEntry {
-                        name: crate_name,
-                        version: dep.version.clone(),
-                        features: dep.features.iter().cloned().collect(),
-                        dep_kind: dep.dep_kind,
-                        original_dep_kind: dep.dep_kind,
-                        group,
-                        enabled: is_enabled,
-                        originally_enabled: is_enabled,
-                    }
+                    CrateEntry::new(group, crate_name, &dep, is_enabled, is_enabled)
                 })
                 .collect();
 
@@ -606,15 +616,8 @@ fn build_expanded_pack(
     let grouped = spec.all_crates_with_grouping();
     let entries = grouped
         .into_iter()
-        .map(|(group, crate_name, dep, is_default)| CrateEntry {
-            name: crate_name,
-            version: dep.version.clone(),
-            features: dep.features.iter().cloned().collect(),
-            dep_kind: dep.dep_kind,
-            original_dep_kind: dep.dep_kind,
-            group,
-            enabled: is_default,
-            originally_enabled: false, // new pack, nothing was originally enabled
+        .map(|(group, crate_name, dep, is_default)| {
+            CrateEntry::new(group, crate_name, &dep, is_default, false)
         })
         .collect();
 
