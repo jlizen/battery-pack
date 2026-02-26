@@ -2178,9 +2178,12 @@ fn apply_add_changes(changes: &[AddChange]) -> Result<()> {
                 }
                 // TODO: Implement fine-grained Cargo.toml manipulation
                 // For now, run cargo bp sync to reconcile
-                let _ = std::process::Command::new("cargo")
+                let status = std::process::Command::new("cargo")
                     .args(["bp", "sync"])
-                    .status();
+                    .status()?;
+                if !status.success() {
+                    println!("{}", style(format!("  Failed to sync {}", name)).red());
+                }
             }
         }
     }
