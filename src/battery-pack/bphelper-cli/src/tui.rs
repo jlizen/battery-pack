@@ -12,7 +12,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Position, Rect},
     style::{Color, Modifier, Style, Stylize},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::rc::Rc;
@@ -90,10 +90,17 @@ enum Screen {
     /// Never rendered or handled — immediately overwritten.
     Empty,
     Loading(LoadingState),
+    /// [impl tui.network.error]
+    Error(ErrorScreen),
     List(ListScreen),
     Detail(DetailScreen),
     NewProjectForm(FormScreen),
     Add(AddScreen),
+}
+
+struct ErrorScreen {
+    message: String,
+    retry_target: LoadingTarget,
 }
 
 struct LoadingState {
@@ -673,7 +680,8 @@ impl App {
             // Process any pending loading state (initial load, detail navigation,
             // browse tab transitions). This is the single place where Loading
             // screens are resolved — handle_key just sets up Screen::Loading.
-            self.process_loading()?;
+            // Errors transition to Screen::Error instead of crashing.
+            self.process_loading();
 
             terminal.draw(|frame| self.render(frame))?;
 
@@ -711,27 +719,37 @@ impl App {
         Ok(())
     }
 
-    fn process_loading(&mut self) -> Result<()> {
+    /// [impl tui.network.error]
+    fn process_loading(&mut self) {
         // Take ownership of the screen so we can move data out of LoadingTarget variants.
         let screen = std::mem::replace(&mut self.screen, Screen::Empty);
 
         let Screen::Loading(state) = screen else {
             self.screen = screen;
-            return Ok(());
+            return;
         };
 
         match state.target {
             LoadingTarget::List { filter } => {
-                let items = fetch_battery_pack_list(&self.source, filter.as_deref())?;
-                let mut list_state = ListState::default();
-                if !items.is_empty() {
-                    list_state.select(Some(0));
+                match fetch_battery_pack_list(&self.source, filter.as_deref()) {
+                    Ok(items) => {
+                        let mut list_state = ListState::default();
+                        if !items.is_empty() {
+                            list_state.select(Some(0));
+                        }
+                        self.screen = Screen::List(ListScreen {
+                            items,
+                            list_state,
+                            filter,
+                        });
+                    }
+                    Err(e) => {
+                        self.screen = Screen::Error(ErrorScreen {
+                            message: format!("{e}"),
+                            retry_target: LoadingTarget::List { filter },
+                        });
+                    }
                 }
-                self.screen = Screen::List(ListScreen {
-                    items,
-                    list_state,
-                    filter,
-                });
             }
             LoadingTarget::Detail {
                 name,
@@ -739,69 +757,119 @@ impl App {
                 came_from_list,
             } => {
                 // --path takes precedence over --crate-source
-                let detail = if path.is_some() {
-                    fetch_battery_pack_detail(&name, path.as_deref())?
+                let result = if path.is_some() {
+                    fetch_battery_pack_detail(&name, path.as_deref())
                 } else {
-                    crate::fetch_battery_pack_detail_from_source(&self.source, &name)?
+                    crate::fetch_battery_pack_detail_from_source(&self.source, &name)
                 };
-                let initial_index = detail.crates.len()
-                    + detail.extends.len()
-                    + detail.templates.len()
-                    + detail.examples.len();
-                self.screen = Screen::Detail(DetailScreen {
-                    detail: Rc::new(detail),
-                    selected_index: initial_index,
-                    came_from_list,
-                });
+                match result {
+                    Ok(detail) => {
+                        let initial_index = detail.crates.len()
+                            + detail.extends.len()
+                            + detail.templates.len()
+                            + detail.examples.len();
+                        self.screen = Screen::Detail(DetailScreen {
+                            detail: Rc::new(detail),
+                            selected_index: initial_index,
+                            came_from_list,
+                        });
+                    }
+                    Err(e) => {
+                        self.screen = Screen::Error(ErrorScreen {
+                            message: format!("{e}"),
+                            retry_target: LoadingTarget::Detail {
+                                name,
+                                path,
+                                came_from_list,
+                            },
+                        });
+                    }
+                }
             }
             LoadingTarget::Add => {
-                let project_dir = std::env::current_dir()?;
-                let packs = load_installed_packs(&project_dir)?;
-                let installed = build_installed_state(packs);
-                self.screen = Screen::Add(AddScreen {
-                    tab: AddTab::Installed,
-                    installed,
-                    browse: BrowseState {
-                        items: Vec::new(),
-                        list_state: ListState::default(),
-                        search_input: String::new(),
-                        searching: false,
-                        expanded: None,
-                    },
-                    changes: None,
-                });
+                let result = std::env::current_dir()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|dir| load_installed_packs(&dir));
+                match result {
+                    Ok(packs) => {
+                        let installed = build_installed_state(packs);
+                        self.screen = Screen::Add(AddScreen {
+                            tab: AddTab::Installed,
+                            installed,
+                            browse: BrowseState {
+                                items: Vec::new(),
+                                list_state: ListState::default(),
+                                search_input: String::new(),
+                                searching: false,
+                                expanded: None,
+                            },
+                            changes: None,
+                        });
+                    }
+                    Err(e) => {
+                        self.screen = Screen::Error(ErrorScreen {
+                            message: format!("{e}"),
+                            retry_target: LoadingTarget::Add,
+                        });
+                    }
+                }
             }
             LoadingTarget::BrowseList {
                 mut add_screen,
                 filter,
             } => {
-                let items = fetch_battery_pack_list(&self.source, filter.as_deref())?;
-                let has_items = !items.is_empty();
-                add_screen.browse.items = items;
-                add_screen.browse.list_state = ListState::default();
-                if has_items {
-                    add_screen.browse.list_state.select(Some(0));
+                match fetch_battery_pack_list(&self.source, filter.as_deref()) {
+                    Ok(items) => {
+                        let has_items = !items.is_empty();
+                        add_screen.browse.items = items;
+                        add_screen.browse.list_state = ListState::default();
+                        if has_items {
+                            add_screen.browse.list_state.select(Some(0));
+                        }
+                        add_screen.tab = AddTab::Browse;
+                        self.screen = Screen::Add(add_screen);
+                    }
+                    Err(e) => {
+                        self.screen = Screen::Error(ErrorScreen {
+                            message: format!("{e}"),
+                            retry_target: LoadingTarget::BrowseList {
+                                add_screen,
+                                filter,
+                            },
+                        });
+                    }
                 }
-                add_screen.tab = AddTab::Browse;
-                self.screen = Screen::Add(add_screen);
             }
             LoadingTarget::BrowseExpand {
                 mut add_screen,
                 bp_name,
                 bp_short_name,
             } => {
-                let (_version, spec) = crate::fetch_bp_spec(&self.source, &bp_name)?;
-                let summary = BatteryPackSummary {
-                    name: bp_name,
-                    short_name: bp_short_name,
-                    version: spec.version.clone(),
-                    description: String::new(),
-                };
-                add_screen.browse.expanded = Some(build_expanded_pack(&summary, spec));
-                self.screen = Screen::Add(add_screen);
+                match crate::fetch_bp_spec(&self.source, &bp_name) {
+                    Ok((_version, spec)) => {
+                        let summary = BatteryPackSummary {
+                            name: bp_name,
+                            short_name: bp_short_name,
+                            version: spec.version.clone(),
+                            description: String::new(),
+                        };
+                        add_screen.browse.expanded =
+                            Some(build_expanded_pack(&summary, spec));
+                        self.screen = Screen::Add(add_screen);
+                    }
+                    Err(e) => {
+                        self.screen = Screen::Error(ErrorScreen {
+                            message: format!("{e}"),
+                            retry_target: LoadingTarget::BrowseExpand {
+                                add_screen,
+                                bp_name,
+                                bp_short_name,
+                            },
+                        });
+                    }
+                }
             }
         }
-        Ok(())
     }
 
     fn execute_action(&self, action: &PendingAction) -> Result<()> {
@@ -894,6 +962,10 @@ impl App {
 
         let action = match &self.screen {
             Screen::Empty | Screen::Loading(_) => Action::None,
+            Screen::Error(_) => {
+                self.handle_error_key(key);
+                return;
+            }
             Screen::List(state) => match key {
                 KeyCode::Up | KeyCode::Char('k') => Action::ListUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::ListDown,
@@ -1233,6 +1305,28 @@ impl App {
         });
     }
 
+    /// [impl tui.network.error]
+    fn handle_error_key(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Enter | KeyCode::Char('r') => {
+                // Retry: re-enter Loading with the same target.
+                let screen = std::mem::replace(&mut self.screen, Screen::Empty);
+                let Screen::Error(error) = screen else {
+                    self.screen = screen;
+                    return;
+                };
+                self.screen = Screen::Loading(LoadingState {
+                    message: "Loading...".to_string(),
+                    target: error.retry_target,
+                });
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.should_quit = true;
+            }
+            _ => {}
+        }
+    }
+
     fn handle_add_key(&mut self, key: KeyCode) {
         let Screen::Add(state) = &mut self.screen else {
             return;
@@ -1377,6 +1471,7 @@ impl App {
         match &mut self.screen {
             Screen::Empty => {}
             Screen::Loading(state) => render_loading(frame, state),
+            Screen::Error(state) => render_error(frame, state),
             Screen::List(state) => render_list(frame, state),
             Screen::Detail(state) => render_detail(frame, state),
             Screen::NewProjectForm(state) => render_form(frame, state),
@@ -1417,6 +1512,32 @@ fn render_loading(frame: &mut Frame, state: &LoadingState) {
     let vertical = Layout::vertical([Constraint::Length(1)]).flex(Flex::Center);
     let [center] = vertical.areas(area);
     frame.render_widget(text, center);
+}
+
+/// [impl tui.network.error]
+fn render_error(frame: &mut Frame, state: &ErrorScreen) {
+    let area = frame.area();
+
+    let error_text = Text::from(vec![
+        Line::from(Span::styled(
+            "Error",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(state.message.as_str()),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Press Enter or r to retry, Esc or q to quit",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ]);
+
+    let paragraph = Paragraph::new(error_text).centered();
+
+    let vertical =
+        Layout::vertical([Constraint::Length(5)]).flex(Flex::Center);
+    let [center] = vertical.areas(area);
+    frame.render_widget(paragraph, center);
 }
 
 fn render_list(frame: &mut Frame, state: &mut ListScreen) {
@@ -3554,15 +3675,90 @@ mod tests {
     }
 
     /// [verify tui.network.error]
-    /// NOTE: spec/impl gap. The spec requires network errors to be displayed
-    /// without crashing, with a retry option. The current implementation
-    /// propagates errors via `?` in process_loading(), which crashes the
-    /// TUI. This test documents the gap; the fix requires adding an error
-    /// screen variant and catch logic in the run loop.
+    /// Error screen renders with error message and key hints.
     #[test]
-    fn network_error_handling_spec_gap() {
-        // Intentionally empty — documents a spec/impl gap.
-        // See tui.network.error in md/spec/tui.md.
+    fn error_screen_renders_message() {
+        let mut app = make_app(Screen::Error(ErrorScreen {
+            message: "connection refused".to_string(),
+            retry_target: LoadingTarget::List { filter: None },
+        }));
+        let output = render_app_to_string(&mut app, 60, 10);
+        expect![[r#"
+            "                                                            "
+            "                                                            "
+            "                                                            "
+            "                            Error                           "
+            "                                                            "
+            "                     connection refused                     "
+            "                                                            "
+            "         Press Enter or r to retry, Esc or q to quit        "
+            "                                                            "
+            "                                                            "
+        "#]]
+        .assert_eq(&output);
+    }
+
+    /// [verify tui.network.error]
+    /// Enter key retries by transitioning back to Loading screen with
+    /// the original target (including filter) preserved.
+    #[test]
+    fn error_screen_enter_retries() {
+        let mut app = make_app(Screen::Error(ErrorScreen {
+            message: "timeout".to_string(),
+            retry_target: LoadingTarget::List {
+                filter: Some("test".to_string()),
+            },
+        }));
+
+        app.handle_key(KeyCode::Enter);
+
+        let Screen::Loading(LoadingState {
+            target: LoadingTarget::List { filter },
+            ..
+        }) = &app.screen
+        else {
+            panic!("expected Screen::Loading(LoadingTarget::List)");
+        };
+        assert_eq!(filter.as_deref(), Some("test"));
+    }
+
+    /// [verify tui.network.error]
+    /// 'r' key also retries.
+    #[test]
+    fn error_screen_r_retries() {
+        let mut app = make_app(Screen::Error(ErrorScreen {
+            message: "timeout".to_string(),
+            retry_target: LoadingTarget::List { filter: None },
+        }));
+
+        app.handle_key(KeyCode::Char('r'));
+        assert!(matches!(app.screen, Screen::Loading(_)));
+    }
+
+    /// [verify tui.network.error]
+    /// Esc quits from error screen.
+    #[test]
+    fn error_screen_esc_quits() {
+        let mut app = make_app(Screen::Error(ErrorScreen {
+            message: "error".to_string(),
+            retry_target: LoadingTarget::Add,
+        }));
+
+        app.handle_key(KeyCode::Esc);
+        assert!(app.should_quit);
+    }
+
+    /// [verify tui.network.error]
+    /// 'q' quits from error screen.
+    #[test]
+    fn error_screen_q_quits() {
+        let mut app = make_app(Screen::Error(ErrorScreen {
+            message: "error".to_string(),
+            retry_target: LoadingTarget::Add,
+        }));
+
+        app.handle_key(KeyCode::Char('q'));
+        assert!(app.should_quit);
     }
 
     /// [verify tui.new.template-list]
