@@ -153,6 +153,17 @@ enum DetailItem {
     ActionNewProject,
 }
 
+/// Advance or retreat a wrapping index within `0..count`.
+fn wrapping_nav(index: &mut usize, count: usize, forward: bool) {
+    if count > 0 {
+        *index = if forward {
+            (*index + 1) % count
+        } else {
+            (*index + count - 1) % count
+        };
+    }
+}
+
 impl DetailScreen {
     /// Get the total count of selectable items without building the full vector.
     /// This is more efficient for navigation operations that only need the count.
@@ -208,16 +219,12 @@ impl DetailScreen {
 
     fn select_next(&mut self) {
         let count = self.item_count();
-        if count > 0 {
-            self.selected_index = (self.selected_index + 1) % count;
-        }
+        wrapping_nav(&mut self.selected_index, count, true);
     }
 
     fn select_prev(&mut self) {
         let count = self.item_count();
-        if count > 0 {
-            self.selected_index = (self.selected_index + count - 1) % count;
-        }
+        wrapping_nav(&mut self.selected_index, count, false);
     }
 }
 
@@ -242,6 +249,22 @@ enum FormField {
     ProjectName,
 }
 
+impl FormScreen {
+    fn focused_field_mut(&mut self) -> &mut String {
+        match self.focused_field {
+            FormField::Directory => &mut self.directory,
+            FormField::ProjectName => &mut self.project_name,
+        }
+    }
+
+    fn focused_field_len(&self) -> usize {
+        match self.focused_field {
+            FormField::Directory => self.directory.len(),
+            FormField::ProjectName => self.project_name.len(),
+        }
+    }
+}
+
 // ============================================================================
 // Add screen (interactive dependency manager)
 // ============================================================================
@@ -254,7 +277,7 @@ struct AddScreen {
     changes: Option<Vec<AddChange>>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum AddTab {
     Installed,
     Browse,
@@ -315,16 +338,12 @@ impl InstalledState {
 
     fn select_next(&mut self) {
         let total = self.total_entries();
-        if total > 0 {
-            self.selected_index = (self.selected_index + 1) % total;
-        }
+        wrapping_nav(&mut self.selected_index, total, true);
     }
 
     fn select_prev(&mut self) {
         let total = self.total_entries();
-        if total > 0 {
-            self.selected_index = (self.selected_index + total - 1) % total;
-        }
+        wrapping_nav(&mut self.selected_index, total, false);
     }
 
     /// Toggle the currently selected crate's enabled state.
@@ -407,17 +426,11 @@ impl InstalledState {
 
 impl ExpandedPack {
     fn select_next(&mut self) {
-        let len = self.pack.entries.len();
-        if len > 0 {
-            self.selected_index = (self.selected_index + 1) % len;
-        }
+        wrapping_nav(&mut self.selected_index, self.pack.entries.len(), true);
     }
 
     fn select_prev(&mut self) {
-        let len = self.pack.entries.len();
-        if len > 0 {
-            self.selected_index = (self.selected_index + len - 1) % len;
-        }
+        wrapping_nav(&mut self.selected_index, self.pack.entries.len(), false);
     }
 
     fn toggle_selected(&mut self) {
@@ -499,10 +512,6 @@ enum PendingAction {
     /// Open a URL in the browser (generic)
     OpenUrl {
         url: String,
-    },
-    /// Open crates.io for the battery pack
-    OpenCratesIo {
-        crate_name: String,
     },
     AddToProject {
         battery_pack: String,
@@ -706,16 +715,6 @@ impl App {
         match action {
             PendingAction::OpenUrl { url } => {
                 if let Err(e) = open::that(url) {
-                    println!("Failed to open browser: {}", e);
-                    println!("URL: {}", url);
-                    println!("\nPress Enter to return to TUI...");
-                    let _ = std::io::stdin().read_line(&mut String::new());
-                }
-                // No "press enter" for successful open - just return immediately
-            }
-            PendingAction::OpenCratesIo { crate_name } => {
-                let url = format!("https://crates.io/crates/{}", crate_name);
-                if let Err(e) = open::that(&url) {
                     println!("Failed to open browser: {}", e);
                     println!("URL: {}", url);
                     println!("\nPress Enter to return to TUI...");
@@ -1003,7 +1002,8 @@ impl App {
                 self.pending_action = Some(PendingAction::OpenUrl { url });
             }
             Action::DetailOpenCratesIo(crate_name) => {
-                self.pending_action = Some(PendingAction::OpenCratesIo { crate_name });
+                let url = format!("https://crates.io/crates/{}", crate_name);
+                self.pending_action = Some(PendingAction::OpenUrl { url });
             }
             Action::DetailAdd(battery_pack) => {
                 self.pending_action = Some(PendingAction::AddToProject { battery_pack });
@@ -1041,10 +1041,7 @@ impl App {
                         FormField::Directory => FormField::ProjectName,
                         FormField::ProjectName => FormField::Directory,
                     };
-                    state.cursor_position = match state.focused_field {
-                        FormField::Directory => state.directory.len(),
-                        FormField::ProjectName => state.project_name.len(),
-                    };
+                    state.cursor_position = state.focused_field_len();
                 }
             }
             Action::FormSubmit(
@@ -1077,34 +1074,25 @@ impl App {
             }
             Action::FormChar(c) => {
                 if let Screen::NewProjectForm(state) = &mut self.screen {
-                    let field = match state.focused_field {
-                        FormField::Directory => &mut state.directory,
-                        FormField::ProjectName => &mut state.project_name,
-                    };
-                    field.insert(state.cursor_position, c);
+                    let pos = state.cursor_position;
+                    state.focused_field_mut().insert(pos, c);
                     state.cursor_position += 1;
                 }
             }
             Action::FormBackspace => {
                 if let Screen::NewProjectForm(state) = &mut self.screen {
                     if state.cursor_position > 0 {
-                        let field = match state.focused_field {
-                            FormField::Directory => &mut state.directory,
-                            FormField::ProjectName => &mut state.project_name,
-                        };
-                        field.remove(state.cursor_position - 1);
+                        let pos = state.cursor_position - 1;
+                        state.focused_field_mut().remove(pos);
                         state.cursor_position -= 1;
                     }
                 }
             }
             Action::FormDelete => {
                 if let Screen::NewProjectForm(state) = &mut self.screen {
-                    let field = match state.focused_field {
-                        FormField::Directory => &mut state.directory,
-                        FormField::ProjectName => &mut state.project_name,
-                    };
-                    if state.cursor_position < field.len() {
-                        field.remove(state.cursor_position);
+                    let pos = state.cursor_position;
+                    if pos < state.focused_field_len() {
+                        state.focused_field_mut().remove(pos);
                     }
                 }
             }
@@ -1115,11 +1103,7 @@ impl App {
             }
             Action::FormRight => {
                 if let Screen::NewProjectForm(state) = &mut self.screen {
-                    let field_len = match state.focused_field {
-                        FormField::Directory => state.directory.len(),
-                        FormField::ProjectName => state.project_name.len(),
-                    };
-                    if state.cursor_position < field_len {
+                    if state.cursor_position < state.focused_field_len() {
                         state.cursor_position += 1;
                     }
                 }
@@ -1131,10 +1115,7 @@ impl App {
             }
             Action::FormEnd => {
                 if let Screen::NewProjectForm(state) = &mut self.screen {
-                    state.cursor_position = match state.focused_field {
-                        FormField::Directory => state.directory.len(),
-                        FormField::ProjectName => state.project_name.len(),
-                    };
+                    state.cursor_position = state.focused_field_len();
                 }
             }
         }
@@ -1234,10 +1215,11 @@ impl App {
                         KeyCode::Down | KeyCode::Char('j') => expanded.select_next(),
                         KeyCode::Char(' ') => expanded.toggle_selected(),
                         KeyCode::Enter => {
-                            let expanded = state.browse.expanded.take().unwrap();
-                            let has_selected = expanded.pack.entries.iter().any(|e| e.enabled);
-                            if has_selected {
-                                state.installed.packs.push(expanded.pack);
+                            if let Some(expanded) = state.browse.expanded.take() {
+                                let has_selected = expanded.pack.entries.iter().any(|e| e.enabled);
+                                if has_selected {
+                                    state.installed.packs.push(expanded.pack);
+                                }
                             }
                             state.tab = AddTab::Installed;
                         }
@@ -1320,6 +1302,25 @@ impl App {
 // Screen renderers
 // ============================================================================
 
+/// Build a `ListItem` for a battery pack summary row (shared by list and browse views).
+fn bp_summary_list_item(bp: &BatteryPackSummary) -> ListItem<'_> {
+    let desc = bp.description.lines().next().unwrap_or("");
+    let line = Line::from(vec![
+        Span::styled(
+            format!("{:<20}", bp.short_name),
+            Style::default().fg(Color::Green).bold(),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("{:<10}", bp.version),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw("  "),
+        Span::raw(desc),
+    ]);
+    ListItem::new(line)
+}
+
 fn render_loading(frame: &mut Frame, state: &LoadingState) {
     let area = frame.area();
     let text = Paragraph::new(state.message.as_str())
@@ -1354,27 +1355,7 @@ fn render_list(frame: &mut Frame, state: &mut ListScreen) {
     );
 
     // List
-    let items: Vec<ListItem> = state
-        .items
-        .iter()
-        .map(|bp| {
-            let desc = bp.description.lines().next().unwrap_or("");
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("{:<20}", bp.short_name),
-                    Style::default().fg(Color::Green).bold(),
-                ),
-                Span::raw("  "),
-                Span::styled(
-                    format!("{:<10}", bp.version),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw("  "),
-                Span::raw(desc),
-            ]);
-            ListItem::new(line)
-        })
-        .collect();
+    let items: Vec<ListItem> = state.items.iter().map(bp_summary_list_item).collect();
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL))
@@ -1655,12 +1636,10 @@ fn render_form(frame: &mut Frame, state: &FormScreen) {
     );
 
     // Show cursor in active field
-    let (cursor_area, cursor_x) = match state.focused_field {
-        FormField::Directory => (dir_input, state.cursor_position.min(state.directory.len())),
-        FormField::ProjectName => (
-            name_input,
-            state.cursor_position.min(state.project_name.len()),
-        ),
+    let cursor_x = state.cursor_position.min(state.focused_field_len());
+    let cursor_area = match state.focused_field {
+        FormField::Directory => dir_input,
+        FormField::ProjectName => name_input,
     };
     // +1 for border
     frame.set_cursor_position(Position::new(
@@ -1895,27 +1874,7 @@ fn render_add_browse(frame: &mut Frame, state: &mut BrowseState, area: Rect) {
     }
 
     // Battery pack list
-    let items: Vec<ListItem> = state
-        .items
-        .iter()
-        .map(|bp| {
-            let desc = bp.description.lines().next().unwrap_or("");
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("{:<20}", bp.short_name),
-                    Style::default().fg(Color::Green).bold(),
-                ),
-                Span::raw("  "),
-                Span::styled(
-                    format!("{:<10}", bp.version),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw("  "),
-                Span::raw(desc),
-            ]);
-            ListItem::new(line)
-        })
-        .collect();
+    let items: Vec<ListItem> = state.items.iter().map(bp_summary_list_item).collect();
 
     if items.is_empty() && !state.searching {
         let hint = Paragraph::new("  Press / to search for battery packs on crates.io")
@@ -2019,4 +1978,1176 @@ fn apply_add_changes(changes: &[AddChange]) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bphelper_manifest::{BatteryPackSpec, CrateSpec, DepKind};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // ====================================================================
+    // Fixture helpers
+    // ====================================================================
+
+    /// Create a minimal CrateSpec with sensible defaults.
+    fn crate_spec(version: &str) -> CrateSpec {
+        CrateSpec {
+            version: version.to_string(),
+            features: BTreeSet::new(),
+            dep_kind: DepKind::Normal,
+            optional: false,
+        }
+    }
+
+    /// Create a CrateSpec with features.
+    fn crate_spec_with_features(version: &str, features: &[&str]) -> CrateSpec {
+        CrateSpec {
+            version: version.to_string(),
+            features: features.iter().map(|s| s.to_string()).collect(),
+            dep_kind: DepKind::Normal,
+            optional: false,
+        }
+    }
+
+    /// Create a BatteryPackSpec with the given crates and features.
+    fn make_spec(crates: &[(&str, CrateSpec)], features: &[(&str, &[&str])]) -> BatteryPackSpec {
+        BatteryPackSpec {
+            name: "test-battery-pack".to_string(),
+            version: "1.0.0".to_string(),
+            description: "A test battery pack".to_string(),
+            repository: None,
+            keywords: Vec::new(),
+            crates: crates
+                .iter()
+                .map(|(name, spec)| (name.to_string(), spec.clone()))
+                .collect(),
+            features: features
+                .iter()
+                .map(|(name, deps)| {
+                    (
+                        name.to_string(),
+                        deps.iter().map(|d| d.to_string()).collect(),
+                    )
+                })
+                .collect(),
+            hidden: BTreeSet::new(),
+            templates: BTreeMap::new(),
+        }
+    }
+
+    /// Create an InstalledPackState directly (bypasses I/O).
+    fn make_installed_pack(name: &str, entries: Vec<CrateEntry>) -> InstalledPackState {
+        InstalledPackState {
+            name: format!("{}-battery-pack", name),
+            short_name: name.to_string(),
+            version: "1.0.0".to_string(),
+            entries,
+        }
+    }
+
+    /// Create a CrateEntry with the given state.
+    fn make_entry(name: &str, enabled: bool, originally_enabled: bool) -> CrateEntry {
+        CrateEntry {
+            name: name.to_string(),
+            version: "0.1.0".to_string(),
+            features: Vec::new(),
+            group: "default".to_string(),
+            enabled,
+            originally_enabled,
+        }
+    }
+
+    /// Create an InstalledState from packs.
+    fn make_installed(packs: Vec<InstalledPackState>) -> InstalledState {
+        InstalledState {
+            packs,
+            selected_index: 0,
+        }
+    }
+
+    /// Create a BatteryPackDetail for DetailScreen tests.
+    fn make_detail(crates: &[&str], templates: &[&str], examples: &[&str]) -> BatteryPackDetail {
+        BatteryPackDetail {
+            name: "test-battery-pack".to_string(),
+            short_name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Test battery pack".to_string(),
+            repository: Some("https://github.com/test/test".to_string()),
+            owners: Vec::new(),
+            crates: crates.iter().map(|s| s.to_string()).collect(),
+            extends: Vec::new(),
+            templates: templates
+                .iter()
+                .map(|name| crate::TemplateInfo {
+                    name: name.to_string(),
+                    path: format!("templates/{}", name),
+                    description: None,
+                    repo_path: None,
+                })
+                .collect(),
+            examples: examples
+                .iter()
+                .map(|name| crate::ExampleInfo {
+                    name: name.to_string(),
+                    description: None,
+                    repo_path: None,
+                })
+                .collect(),
+        }
+    }
+
+    // ====================================================================
+    // Tier 1: State logic tests
+    // ====================================================================
+
+    // --- CrateEntry ---
+
+    /// [verify tui.installed.show-state]
+    #[test]
+    fn version_info_no_features() {
+        let entry = CrateEntry {
+            name: "serde".to_string(),
+            version: "1.0.0".to_string(),
+            features: Vec::new(),
+            group: "default".to_string(),
+            enabled: true,
+            originally_enabled: true,
+        };
+        assert_eq!(entry.version_info(), "(1.0.0)");
+    }
+
+    /// [verify tui.installed.show-state]
+    #[test]
+    fn version_info_with_features() {
+        let entry = CrateEntry {
+            name: "serde".to_string(),
+            version: "1.0.0".to_string(),
+            features: vec!["derive".to_string(), "std".to_string()],
+            group: "default".to_string(),
+            enabled: true,
+            originally_enabled: true,
+        };
+        assert_eq!(entry.version_info(), "(1.0.0, features: derive, std)");
+    }
+
+    // --- InstalledState::toggle_selected ---
+
+    /// [verify tui.installed.toggle-crate]
+    #[test]
+    fn toggle_selected_flips_entry() {
+        let mut state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, true),
+                make_entry("tower", true, true),
+                make_entry("reqwest", false, false),
+            ],
+        )]);
+
+        // Toggle first entry (axum: true -> false)
+        state.toggle_selected();
+        assert!(!state.packs[0].entries[0].enabled);
+        assert!(state.packs[0].entries[1].enabled); // tower unchanged
+
+        // Toggle again (axum: false -> true)
+        state.toggle_selected();
+        assert!(state.packs[0].entries[0].enabled);
+    }
+
+    /// [verify tui.installed.toggle-crate]
+    #[test]
+    fn toggle_selected_targets_correct_entry_across_packs() {
+        let mut state = make_installed(vec![
+            make_installed_pack(
+                "web",
+                vec![
+                    make_entry("axum", true, true),
+                    make_entry("tower", true, true),
+                ],
+            ),
+            make_installed_pack(
+                "db",
+                vec![
+                    make_entry("sqlx", true, true),
+                    make_entry("sea-orm", false, false),
+                ],
+            ),
+        ]);
+
+        // Move to index 2 (sqlx in second pack) and toggle
+        state.selected_index = 2;
+        state.toggle_selected();
+        assert!(!state.packs[1].entries[0].enabled); // sqlx toggled off
+        assert!(state.packs[0].entries[0].enabled); // axum unchanged
+        assert!(state.packs[0].entries[1].enabled); // tower unchanged
+    }
+
+    /// [verify tui.installed.features] (partial: verifies group isolation, not group-level toggling)
+    #[test]
+    fn toggle_only_affects_target_not_other_groups() {
+        let mut state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                CrateEntry {
+                    name: "axum".to_string(),
+                    version: "0.7.0".to_string(),
+                    features: Vec::new(),
+                    group: "server".to_string(),
+                    enabled: true,
+                    originally_enabled: true,
+                },
+                CrateEntry {
+                    name: "reqwest".to_string(),
+                    version: "0.12.0".to_string(),
+                    features: Vec::new(),
+                    group: "client".to_string(),
+                    enabled: true,
+                    originally_enabled: true,
+                },
+            ],
+        )]);
+
+        // Toggle axum (server group)
+        state.selected_index = 0;
+        state.toggle_selected();
+        assert!(!state.packs[0].entries[0].enabled); // axum off
+        assert!(state.packs[0].entries[1].enabled); // reqwest (client) unchanged
+    }
+
+    // --- InstalledState navigation ---
+
+    #[test]
+    fn installed_navigation_wraps() {
+        let mut state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("a", true, true),
+                make_entry("b", true, true),
+                make_entry("c", true, true),
+            ],
+        )]);
+
+        assert_eq!(state.selected_index, 0);
+        state.select_prev(); // wrap to end
+        assert_eq!(state.selected_index, 2);
+        state.select_next(); // wrap to start
+        assert_eq!(state.selected_index, 0);
+    }
+
+    // --- InstalledState::has_changes / has_new_packs ---
+
+    /// [verify tui.nav.exit]
+    #[test]
+    fn has_changes_detects_toggled_entries() {
+        let state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, true),   // no change
+                make_entry("tower", false, true), // was on, now off
+            ],
+        )]);
+        assert!(state.has_changes());
+    }
+
+    #[test]
+    fn has_changes_false_when_unchanged() {
+        let state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, true),
+                make_entry("tower", false, false),
+            ],
+        )]);
+        assert!(!state.has_changes());
+    }
+
+    /// [verify tui.browse.add]
+    #[test]
+    fn has_new_packs_detects_added_from_browse() {
+        let state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                // All originally_enabled=false (came from Browse), some now enabled
+                make_entry("axum", true, false),
+                make_entry("tower", false, false),
+            ],
+        )]);
+        assert!(state.has_new_packs());
+    }
+
+    #[test]
+    fn has_new_packs_false_when_none_enabled() {
+        let state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", false, false),
+                make_entry("tower", false, false),
+            ],
+        )]);
+        assert!(!state.has_new_packs());
+    }
+
+    // --- InstalledState::collect_changes ---
+
+    /// [verify tui.nav.exit]
+    #[test]
+    fn collect_changes_new_pack() {
+        let state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, false),
+                make_entry("tower", true, false),
+                make_entry("reqwest", false, false), // not selected
+            ],
+        )]);
+
+        let changes = state.collect_changes();
+        assert_eq!(changes.len(), 1);
+        match &changes[0] {
+            AddChange::AddPack { name, crates } => {
+                assert_eq!(name, "web-battery-pack");
+                assert_eq!(crates.len(), 2);
+                assert_eq!(crates[0].name, "axum");
+                assert_eq!(crates[1].name, "tower");
+            }
+            _ => panic!("Expected AddPack"),
+        }
+    }
+
+    /// [verify tui.nav.exit]
+    #[test]
+    fn collect_changes_update_existing_pack() {
+        let state = make_installed(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, true),     // unchanged
+                make_entry("tower", false, true),   // removed
+                make_entry("reqwest", true, false), // added
+            ],
+        )]);
+
+        let changes = state.collect_changes();
+        assert_eq!(changes.len(), 1);
+        match &changes[0] {
+            AddChange::UpdatePack {
+                name,
+                add_crates,
+                remove_crates,
+            } => {
+                assert_eq!(name, "web-battery-pack");
+                assert_eq!(add_crates.len(), 1);
+                assert_eq!(add_crates[0].name, "reqwest");
+                assert_eq!(remove_crates, &["tower"]);
+            }
+            _ => panic!("Expected UpdatePack"),
+        }
+    }
+
+    /// [verify tui.nav.exit]
+    #[test]
+    fn collect_changes_skips_unchanged_packs() {
+        let state = make_installed(vec![
+            make_installed_pack(
+                "web",
+                vec![
+                    make_entry("axum", true, true),
+                    make_entry("tower", true, true),
+                ],
+            ),
+            make_installed_pack(
+                "db",
+                vec![
+                    make_entry("sqlx", false, true), // changed
+                ],
+            ),
+        ]);
+
+        let changes = state.collect_changes();
+        assert_eq!(changes.len(), 1); // only db pack
+        match &changes[0] {
+            AddChange::UpdatePack {
+                name,
+                remove_crates,
+                ..
+            } => {
+                assert_eq!(name, "db-battery-pack");
+                assert_eq!(remove_crates, &["sqlx"]);
+            }
+            _ => panic!("Expected UpdatePack"),
+        }
+    }
+
+    // --- DetailScreen ---
+
+    /// [verify tui.browse.detail]
+    #[test]
+    fn detail_selectable_items_includes_all_sections() {
+        let detail = make_detail(
+            &["serde", "tokio"],    // 2 crates
+            &["basic", "advanced"], // 2 templates
+            &["hello-world"],       // 1 example
+        );
+        let screen = DetailScreen {
+            detail: Rc::new(detail),
+            selected_index: 0,
+            came_from_list: false,
+        };
+
+        let items = screen.selectable_items();
+        // 2 crates + 2 templates + 1 example + 3 actions = 8
+        assert_eq!(items.len(), 8);
+        assert_eq!(screen.item_count(), 8);
+
+        // Verify order: crates, extends (0), templates, examples, actions
+        assert!(matches!(&items[0], DetailItem::Crate(n) if n == "serde"));
+        assert!(matches!(&items[1], DetailItem::Crate(n) if n == "tokio"));
+        assert!(matches!(&items[2], DetailItem::Template { .. }));
+        assert!(matches!(&items[3], DetailItem::Template { .. }));
+        assert!(matches!(&items[4], DetailItem::Example { .. }));
+        assert!(matches!(&items[5], DetailItem::ActionOpenCratesIo));
+        assert!(matches!(&items[6], DetailItem::ActionAddToProject));
+        assert!(matches!(&items[7], DetailItem::ActionNewProject));
+    }
+
+    /// [verify tui.browse.detail]
+    #[test]
+    fn detail_navigation_wraps() {
+        let detail = make_detail(&["serde"], &[], &[]);
+        let mut screen = DetailScreen {
+            detail: Rc::new(detail),
+            selected_index: 0,
+            came_from_list: false,
+        };
+
+        // 1 crate + 3 actions = 4 items
+        assert_eq!(screen.item_count(), 4);
+
+        // Navigate to last item
+        screen.select_prev(); // wraps to 3
+        assert_eq!(screen.selected_index, 3);
+
+        // Navigate forward wraps to 0
+        screen.select_next();
+        assert_eq!(screen.selected_index, 0);
+    }
+
+    #[test]
+    fn detail_selected_item_returns_correct_item() {
+        let detail = make_detail(&["serde", "tokio"], &[], &[]);
+        let screen = DetailScreen {
+            detail: Rc::new(detail),
+            selected_index: 1, // tokio
+            came_from_list: false,
+        };
+
+        let item = screen.selected_item().unwrap();
+        assert!(matches!(item, DetailItem::Crate(n) if n == "tokio"));
+    }
+
+    // --- ExpandedPack ---
+
+    /// [verify tui.browse.add]
+    #[test]
+    fn expanded_pack_toggle_and_navigate() {
+        let mut expanded = ExpandedPack {
+            pack: make_installed_pack(
+                "web",
+                vec![
+                    make_entry("axum", true, false),
+                    make_entry("tower", true, false),
+                    make_entry("reqwest", false, false),
+                ],
+            ),
+            selected_index: 0,
+        };
+
+        // Toggle first entry off
+        expanded.toggle_selected();
+        assert!(!expanded.pack.entries[0].enabled);
+
+        // Navigate to reqwest (index 2)
+        expanded.select_next();
+        expanded.select_next();
+        assert_eq!(expanded.selected_index, 2);
+
+        // Toggle reqwest on
+        expanded.toggle_selected();
+        assert!(expanded.pack.entries[2].enabled);
+
+        // Wrap navigation
+        expanded.select_next(); // wraps to 0
+        assert_eq!(expanded.selected_index, 0);
+    }
+
+    // --- build_installed_state (integration with BatteryPackSpec) ---
+
+    /// [verify tui.installed.show-state]
+    #[test]
+    fn build_installed_state_from_spec() {
+        let spec = make_spec(
+            &[
+                ("serde", crate_spec("1.0.0")),
+                ("tokio", crate_spec_with_features("1.0.0", &["full"])),
+            ],
+            &[("default", &["serde", "tokio"])],
+        );
+
+        let installed_pack = crate::InstalledPack {
+            name: "test-battery-pack".to_string(),
+            short_name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            spec,
+            active_features: BTreeSet::from(["default".to_string()]),
+        };
+
+        let state = build_installed_state(vec![installed_pack]);
+        assert_eq!(state.packs.len(), 1);
+
+        let pack = &state.packs[0];
+        assert_eq!(pack.name, "test-battery-pack");
+        assert_eq!(pack.entries.len(), 2);
+
+        // Both should be enabled (in active features)
+        assert!(pack.entries.iter().all(|e| e.enabled));
+        assert!(pack.entries.iter().all(|e| e.originally_enabled));
+
+        // Check tokio has features
+        let tokio_entry = pack.entries.iter().find(|e| e.name == "tokio").unwrap();
+        assert_eq!(tokio_entry.features, vec!["full"]);
+    }
+
+    /// [verify tui.browse.add]
+    #[test]
+    fn build_expanded_pack_defaults_prechecked() {
+        let spec = make_spec(
+            &[
+                ("serde", crate_spec("1.0.0")),
+                ("tokio", crate_spec("1.0.0")),
+                ("tracing", crate_spec("0.1.0")),
+            ],
+            &[("default", &["serde", "tokio"])],
+        );
+
+        let summary = BatteryPackSummary {
+            name: "test-battery-pack".to_string(),
+            short_name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+        };
+
+        let expanded = build_expanded_pack(&summary, spec);
+
+        // All originally_enabled should be false (new pack)
+        assert!(expanded.pack.entries.iter().all(|e| !e.originally_enabled));
+
+        // Default crates should be pre-checked (enabled=true)
+        let serde = expanded
+            .pack
+            .entries
+            .iter()
+            .find(|e| e.name == "serde")
+            .unwrap();
+        assert!(serde.enabled, "default crate serde should be pre-checked");
+
+        let tokio = expanded
+            .pack
+            .entries
+            .iter()
+            .find(|e| e.name == "tokio")
+            .unwrap();
+        assert!(tokio.enabled, "default crate tokio should be pre-checked");
+
+        // Non-default crates should not be pre-checked
+        let tracing = expanded
+            .pack
+            .entries
+            .iter()
+            .find(|e| e.name == "tracing")
+            .unwrap();
+        assert!(
+            !tracing.enabled,
+            "non-default crate tracing should not be pre-checked"
+        );
+    }
+
+    /// Helper: create an App with a given screen (bypasses loading).
+    fn make_app(screen: Screen) -> App {
+        App {
+            source: CrateSource::Registry,
+            screen,
+            should_quit: false,
+            pending_action: None,
+        }
+    }
+
+    /// Helper: create an AddScreen with installed packs and empty browse.
+    fn make_add_screen(packs: Vec<InstalledPackState>) -> AddScreen {
+        AddScreen {
+            tab: AddTab::Installed,
+            installed: make_installed(packs),
+            browse: BrowseState {
+                items: Vec::new(),
+                list_state: ListState::default(),
+                search_input: String::new(),
+                searching: false,
+                expanded: None,
+            },
+            changes: None,
+        }
+    }
+
+    /// Create a BatteryPackSummary with sensible defaults.
+    fn make_summary(short_name: &str, version: &str, desc: &str) -> BatteryPackSummary {
+        BatteryPackSummary {
+            name: format!("{}-battery-pack", short_name),
+            short_name: short_name.to_string(),
+            version: version.to_string(),
+            description: desc.to_string(),
+        }
+    }
+
+    /// Extract the AddScreen from an App, panicking if it's a different screen.
+    fn unwrap_add_screen(app: &App) -> &AddScreen {
+        match &app.screen {
+            Screen::Add(state) => state,
+            _ => panic!("Expected Add screen"),
+        }
+    }
+
+    /// [verify tui.installed.show-state]
+    #[test]
+    fn build_installed_state_partial_features() {
+        let spec = make_spec(
+            &[
+                ("serde", crate_spec("1.0.0")),
+                ("tokio", crate_spec("1.0.0")),
+                ("tracing", crate_spec("0.1.0")),
+            ],
+            &[
+                ("default", &["serde"]),
+                ("async", &["tokio"]),
+                ("observability", &["tracing"]),
+            ],
+        );
+
+        let installed_pack = crate::InstalledPack {
+            name: "test-battery-pack".to_string(),
+            short_name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            spec,
+            // Only default + async active, not observability
+            active_features: BTreeSet::from(["default".to_string(), "async".to_string()]),
+        };
+
+        let state = build_installed_state(vec![installed_pack]);
+        let pack = &state.packs[0];
+
+        let serde = pack.entries.iter().find(|e| e.name == "serde").unwrap();
+        assert!(serde.enabled, "serde should be enabled (in default)");
+
+        let tokio = pack.entries.iter().find(|e| e.name == "tokio").unwrap();
+        assert!(tokio.enabled, "tokio should be enabled (in async)");
+
+        let tracing = pack.entries.iter().find(|e| e.name == "tracing").unwrap();
+        assert!(
+            !tracing.enabled,
+            "tracing should be disabled (observability not active)"
+        );
+    }
+
+    // ====================================================================
+    // Tier 2: Key handling tests
+    // ====================================================================
+
+    // --- List screen navigation ---
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn list_j_k_navigation() {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        let mut app = make_app(Screen::List(ListScreen {
+            items: vec![
+                make_summary("a", "1.0.0", "Pack A"),
+                make_summary("b", "1.0.0", "Pack B"),
+            ],
+            list_state,
+            filter: None,
+        }));
+
+        app.handle_key(KeyCode::Char('j')); // down
+        if let Screen::List(state) = &app.screen {
+            assert_eq!(state.list_state.selected(), Some(1));
+        } else {
+            panic!("Expected List screen");
+        }
+
+        app.handle_key(KeyCode::Char('k')); // back up
+        if let Screen::List(state) = &app.screen {
+            assert_eq!(state.list_state.selected(), Some(0));
+        } else {
+            panic!("Expected List screen");
+        }
+    }
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn list_q_quits() {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        let mut app = make_app(Screen::List(ListScreen {
+            items: vec![make_summary("a", "1.0.0", "")],
+            list_state,
+            filter: None,
+        }));
+
+        app.handle_key(KeyCode::Char('q'));
+        assert!(app.should_quit);
+    }
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn list_esc_quits() {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        let mut app = make_app(Screen::List(ListScreen {
+            items: Vec::new(),
+            list_state,
+            filter: None,
+        }));
+
+        app.handle_key(KeyCode::Esc);
+        assert!(app.should_quit);
+    }
+
+    // --- Detail screen key handling ---
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn detail_tab_and_arrows_navigate() {
+        let detail = make_detail(&["serde", "tokio"], &[], &[]);
+        let mut app = make_app(Screen::Detail(DetailScreen {
+            detail: Rc::new(detail),
+            selected_index: 0,
+            came_from_list: false,
+        }));
+
+        // Tab moves forward
+        app.handle_key(KeyCode::Tab);
+        if let Screen::Detail(state) = &app.screen {
+            assert_eq!(state.selected_index, 1);
+        } else {
+            panic!("Expected Detail screen");
+        }
+
+        // Down arrow also moves forward
+        app.handle_key(KeyCode::Down);
+        if let Screen::Detail(state) = &app.screen {
+            assert_eq!(state.selected_index, 2);
+        } else {
+            panic!("Expected Detail screen");
+        }
+
+        // Up arrow moves back
+        app.handle_key(KeyCode::Up);
+        if let Screen::Detail(state) = &app.screen {
+            assert_eq!(state.selected_index, 1);
+        } else {
+            panic!("Expected Detail screen");
+        }
+    }
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn detail_esc_when_came_from_list_goes_back() {
+        let detail = make_detail(&["serde"], &[], &[]);
+        let mut app = make_app(Screen::Detail(DetailScreen {
+            detail: Rc::new(detail),
+            selected_index: 0,
+            came_from_list: true,
+        }));
+
+        // Esc with came_from_list transitions to Loading (which would reload list)
+        app.handle_key(KeyCode::Esc);
+        // It tries to process_loading which calls I/O, but we can check it changed screen
+        // Since process_loading will fail (no network), it may stay Loading.
+        // The important thing: it didn't quit.
+        assert!(!app.should_quit);
+    }
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn detail_esc_when_not_from_list_quits() {
+        let detail = make_detail(&["serde"], &[], &[]);
+        let mut app = make_app(Screen::Detail(DetailScreen {
+            detail: Rc::new(detail),
+            selected_index: 0,
+            came_from_list: false,
+        }));
+
+        app.handle_key(KeyCode::Esc);
+        assert!(app.should_quit);
+    }
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn detail_q_quits() {
+        let detail = make_detail(&["serde"], &[], &[]);
+        let mut app = make_app(Screen::Detail(DetailScreen {
+            detail: Rc::new(detail),
+            selected_index: 0,
+            came_from_list: true, // even when came_from_list, q quits
+        }));
+
+        app.handle_key(KeyCode::Char('q'));
+        assert!(app.should_quit);
+    }
+
+    // --- Add screen: Installed tab ---
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn add_installed_space_toggles() {
+        let mut app = make_app(Screen::Add(make_add_screen(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, true),
+                make_entry("tower", true, true),
+            ],
+        )])));
+
+        app.handle_key(KeyCode::Char(' ')); // toggle first entry
+        assert!(!unwrap_add_screen(&app).installed.packs[0].entries[0].enabled);
+    }
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn add_installed_j_k_navigates() {
+        let mut app = make_app(Screen::Add(make_add_screen(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, true),
+                make_entry("tower", true, true),
+                make_entry("reqwest", false, false),
+            ],
+        )])));
+
+        app.handle_key(KeyCode::Char('j'));
+        assert_eq!(unwrap_add_screen(&app).installed.selected_index, 1);
+
+        app.handle_key(KeyCode::Char('k'));
+        assert_eq!(unwrap_add_screen(&app).installed.selected_index, 0);
+    }
+
+    /// [verify tui.nav.cancel]
+    #[test]
+    fn add_installed_esc_quits_without_changes() {
+        let mut app = make_app(Screen::Add(make_add_screen(vec![make_installed_pack(
+            "web",
+            vec![make_entry("axum", true, true)],
+        )])));
+
+        // Toggle a crate to create a pending change
+        app.handle_key(KeyCode::Char(' '));
+
+        // Esc quits without applying
+        app.handle_key(KeyCode::Esc);
+        assert!(app.should_quit);
+        assert!(
+            unwrap_add_screen(&app).changes.is_none(),
+            "Esc should not apply changes"
+        );
+    }
+
+    /// [verify tui.nav.exit]
+    #[test]
+    fn add_installed_enter_applies_when_changes_exist() {
+        let mut app = make_app(Screen::Add(make_add_screen(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, true),
+                make_entry("tower", false, true), // changed: was on, now off
+            ],
+        )])));
+
+        app.handle_key(KeyCode::Enter);
+        assert!(app.should_quit);
+        let state = unwrap_add_screen(&app);
+        assert!(state.changes.is_some(), "Enter should collect changes");
+        assert_eq!(state.changes.as_ref().unwrap().len(), 1);
+    }
+
+    /// [verify tui.nav.exit]
+    #[test]
+    fn add_installed_enter_does_nothing_when_no_changes() {
+        let mut app = make_app(Screen::Add(make_add_screen(vec![make_installed_pack(
+            "web",
+            vec![make_entry("axum", true, true)],
+        )])));
+
+        app.handle_key(KeyCode::Enter);
+        assert!(!app.should_quit, "Enter with no changes should not quit");
+    }
+
+    // --- Add screen: Browse tab ---
+
+    /// [verify tui.browse.search]
+    #[test]
+    fn add_browse_search_mode() {
+        let mut add_screen = make_add_screen(vec![]);
+        add_screen.tab = AddTab::Browse;
+        add_screen.browse.items = vec![make_summary("web", "1.0.0", "Web stuff")];
+        let mut app = make_app(Screen::Add(add_screen));
+
+        // '/' enters search mode
+        app.handle_key(KeyCode::Char('/'));
+        assert!(unwrap_add_screen(&app).browse.searching);
+
+        // Type search text
+        app.handle_key(KeyCode::Char('w'));
+        app.handle_key(KeyCode::Char('e'));
+        app.handle_key(KeyCode::Char('b'));
+        assert_eq!(unwrap_add_screen(&app).browse.search_input, "web");
+
+        // Backspace removes a character
+        app.handle_key(KeyCode::Backspace);
+        assert_eq!(unwrap_add_screen(&app).browse.search_input, "we");
+
+        // Esc cancels search mode
+        app.handle_key(KeyCode::Esc);
+        assert!(!unwrap_add_screen(&app).browse.searching);
+    }
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn add_browse_tab_switches_to_installed() {
+        let mut add_screen = make_add_screen(vec![make_installed_pack(
+            "web",
+            vec![make_entry("axum", true, true)],
+        )]);
+        add_screen.tab = AddTab::Browse;
+        add_screen.browse.items = vec![make_summary("db", "1.0.0", "")];
+        let mut app = make_app(Screen::Add(add_screen));
+
+        app.handle_key(KeyCode::Tab);
+        assert_eq!(unwrap_add_screen(&app).tab, AddTab::Installed);
+    }
+
+    // --- Add screen: Browse expanded pack ---
+
+    /// [verify tui.browse.add]
+    #[test]
+    fn add_browse_expanded_confirm_moves_to_installed() {
+        let mut add_screen = make_add_screen(vec![]);
+        add_screen.tab = AddTab::Browse;
+        add_screen.browse.expanded = Some(ExpandedPack {
+            pack: make_installed_pack(
+                "web",
+                vec![
+                    make_entry("axum", true, false),
+                    make_entry("tower", true, false),
+                ],
+            ),
+            selected_index: 0,
+        });
+        let mut app = make_app(Screen::Add(add_screen));
+
+        // Enter confirms and moves to Installed tab
+        app.handle_key(KeyCode::Enter);
+        let state = unwrap_add_screen(&app);
+        assert_eq!(state.tab, AddTab::Installed);
+        assert!(state.browse.expanded.is_none());
+        // The pack should have been added to installed
+        assert_eq!(state.installed.packs.len(), 1);
+        assert_eq!(state.installed.packs[0].short_name, "web");
+    }
+
+    /// [verify tui.browse.add]
+    #[test]
+    fn add_browse_expanded_esc_cancels() {
+        let mut add_screen = make_add_screen(vec![]);
+        add_screen.tab = AddTab::Browse;
+        add_screen.browse.expanded = Some(ExpandedPack {
+            pack: make_installed_pack("web", vec![make_entry("axum", true, false)]),
+            selected_index: 0,
+        });
+        let mut app = make_app(Screen::Add(add_screen));
+
+        app.handle_key(KeyCode::Esc);
+        let state = unwrap_add_screen(&app);
+        assert!(state.browse.expanded.is_none());
+        assert!(state.installed.packs.is_empty()); // not added
+    }
+
+    /// [verify tui.browse.add]
+    #[test]
+    fn add_browse_expanded_no_selection_discards() {
+        let mut add_screen = make_add_screen(vec![]);
+        add_screen.tab = AddTab::Browse;
+        add_screen.browse.expanded = Some(ExpandedPack {
+            pack: make_installed_pack(
+                "web",
+                vec![
+                    make_entry("axum", false, false), // nothing selected
+                    make_entry("tower", false, false),
+                ],
+            ),
+            selected_index: 0,
+        });
+        let mut app = make_app(Screen::Add(add_screen));
+
+        // Enter with no selections — pack should NOT be added
+        app.handle_key(KeyCode::Enter);
+        let state = unwrap_add_screen(&app);
+        assert_eq!(state.tab, AddTab::Installed);
+        assert!(state.installed.packs.is_empty());
+    }
+
+    // ====================================================================
+    // Tier 3: Rendering tests
+    // ====================================================================
+
+    /// Helper: render an AddScreen into an in-memory terminal and return the
+    /// buffer content as a string (one line per row, padded with spaces).
+    fn render_add_to_string(state: &mut AddScreen, width: u16, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render_add(frame, state)).unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// Helper: render a ListScreen into an in-memory terminal and return the
+    /// buffer content as a string.
+    fn render_list_to_string(state: &mut ListScreen, width: u16, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render_list(frame, state)).unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// [verify tui.main.no-project] (partial: tests empty-state message, not greyed-out styling)
+    /// When no packs are installed, the installed tab shows a message.
+    #[test]
+    fn render_no_packs_installed_message() {
+        let mut state = make_add_screen(vec![]);
+        state.tab = AddTab::Installed;
+        let output = render_add_to_string(&mut state, 60, 15);
+        assert!(
+            output.contains("No battery packs installed"),
+            "Expected 'No battery packs installed' in:\n{}",
+            output
+        );
+    }
+
+    /// [verify tui.installed.list-packs]
+    /// Pack headers show name and version.
+    #[test]
+    fn render_installed_pack_headers() {
+        let mut state = make_add_screen(vec![
+            make_installed_pack("web", vec![make_entry("axum", true, true)]),
+            make_installed_pack("db", vec![make_entry("sqlx", true, true)]),
+        ]);
+        state.tab = AddTab::Installed;
+        let output = render_add_to_string(&mut state, 60, 20);
+        assert!(
+            output.contains("web") && output.contains("1.0.0"),
+            "Expected 'web' and '1.0.0' in:\n{}",
+            output
+        );
+        assert!(output.contains("db"), "Expected 'db' in:\n{}", output);
+    }
+
+    /// [verify tui.installed.list-crates]
+    /// [verify tui.installed.show-state]
+    /// Crate entries show checkbox ([x]/[ ]), name, and version info.
+    #[test]
+    fn render_installed_crate_entries_with_checkboxes() {
+        let mut state = make_add_screen(vec![make_installed_pack(
+            "web",
+            vec![
+                make_entry("axum", true, true),
+                make_entry("tower", false, false),
+            ],
+        )]);
+        state.tab = AddTab::Installed;
+        let output = render_add_to_string(&mut state, 60, 15);
+        assert!(
+            output.contains("[x] axum"),
+            "Expected '[x] axum' in:\n{}",
+            output
+        );
+        assert!(
+            output.contains("[ ] tower"),
+            "Expected '[ ] tower' in:\n{}",
+            output
+        );
+        // Version info should be present
+        assert!(
+            output.contains("(0.1.0)"),
+            "Expected version info '(0.1.0)' in:\n{}",
+            output
+        );
+    }
+
+    /// [verify tui.browse.list]
+    /// Browse list shows name, version, and description.
+    #[test]
+    fn render_browse_list_shows_name_version_description() {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        let mut state = ListScreen {
+            items: vec![
+                make_summary("web", "2.3.0", "Web framework essentials"),
+                make_summary("db", "1.5.0", "Database toolkit"),
+            ],
+            list_state,
+            filter: None,
+        };
+        let output = render_list_to_string(&mut state, 80, 15);
+        // First pack
+        assert!(output.contains("web"), "Expected 'web' in:\n{}", output);
+        assert!(output.contains("2.3.0"), "Expected '2.3.0' in:\n{}", output);
+        assert!(
+            output.contains("Web framework essentials"),
+            "Expected description in:\n{}",
+            output
+        );
+        // Second pack
+        assert!(output.contains("db"), "Expected 'db' in:\n{}", output);
+        assert!(output.contains("1.5.0"), "Expected '1.5.0' in:\n{}", output);
+        assert!(
+            output.contains("Database toolkit"),
+            "Expected description in:\n{}",
+            output
+        );
+    }
+
+    /// [verify tui.nav.keyboard]
+    #[test]
+    fn add_browse_expanded_space_toggles() {
+        let mut add_screen = make_add_screen(vec![]);
+        add_screen.tab = AddTab::Browse;
+        add_screen.browse.expanded = Some(ExpandedPack {
+            pack: make_installed_pack(
+                "web",
+                vec![
+                    make_entry("axum", true, false),
+                    make_entry("tower", false, false),
+                ],
+            ),
+            selected_index: 1, // tower
+        });
+        let mut app = make_app(Screen::Add(add_screen));
+
+        app.handle_key(KeyCode::Char(' '));
+        let expanded = unwrap_add_screen(&app).browse.expanded.as_ref().unwrap();
+        assert!(expanded.pack.entries[1].enabled); // tower toggled on
+    }
 }
