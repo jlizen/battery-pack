@@ -194,6 +194,9 @@ fn list_nav(state: &mut ListState, count: usize, forward: bool) {
 }
 
 fn wait_for_enter() {
+    // ratatui::restore() leaves the alternate screen and disables raw mode but
+    // does not re-show the cursor, so we do it explicitly here.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::cursor::Show);
     println!("\nPress Enter to return to TUI...");
     let _ = std::io::stdin().read_line(&mut String::new());
 }
@@ -682,6 +685,28 @@ impl App {
     }
 
     fn run(mut self) -> Result<()> {
+        // Install a panic hook that restores the terminal before printing the
+        // panic message, so the user isn't left with a broken terminal.
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = ratatui::try_restore();
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::cursor::Show);
+            original_hook(info);
+        }));
+
+        let result = self.run_inner();
+
+        // Always restore the terminal, even if run_inner returned an error.
+        ratatui::restore();
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::cursor::Show);
+
+        // Put the original panic hook back.
+        let _ = std::panic::take_hook();
+
+        result
+    }
+
+    fn run_inner(&mut self) -> Result<()> {
         let mut terminal = ratatui::init();
 
         loop {
@@ -715,11 +740,11 @@ impl App {
             }
         }
 
-        ratatui::restore();
-
         // Apply any pending add changes after TUI exits
         if let Screen::Add(add_screen) = &mut self.screen {
             if let Some(changes) = add_screen.changes.take() {
+                // Restore terminal before applying changes so output is visible.
+                ratatui::restore();
                 apply_add_changes(&changes)?;
             }
         }
