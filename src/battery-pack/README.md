@@ -5,6 +5,8 @@ The `battery-pack` crate provides two things:
 1. **The `cargo bp` CLI** for working with battery packs
 2. **Common infrastructure** for authoring battery packs
 
+📖 **[Read the book](https://battery-pack-rs.github.io/battery-pack)**
+
 ## What's a Battery Pack?
 
 A battery pack bundles everything you need to get started in an area: curated crates, documentation, examples, and templates.

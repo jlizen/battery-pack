@@ -1,2 +1,1 @@
-# battery-pack
-Rust Battery Packs
+src/battery-pack/README.md
