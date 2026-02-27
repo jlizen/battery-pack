@@ -7,7 +7,7 @@ use crate::{
 use anyhow::Result;
 use bphelper_manifest::DepKind;
 use std::collections::{BTreeMap, BTreeSet};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Position, Rect},
@@ -730,6 +730,12 @@ impl App {
                 if let Event::Key(key) = event::read()? {
                     // Windows compatibility: only handle Press events
                     if key.kind == KeyEventKind::Press {
+                        // Ctrl+C quits immediately
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && key.code == KeyCode::Char('c')
+                        {
+                            break;
+                        }
                         self.handle_key(key.code);
                     }
                 }
