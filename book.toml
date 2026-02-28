@@ -3,3 +3,6 @@ title = "Battery Pack"
 authors = ["Niko Matsakis"]
 language = "en"
 src = "md"
+
+[output.html]
+git-repository-url = "https://github.com/battery-pack-rs/battery-pack"
