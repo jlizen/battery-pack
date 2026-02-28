@@ -1287,7 +1287,7 @@ fn should_upgrade_version(current: &str, recommended: &str) -> bool {
     ) {
         // [impl manifest.sync.version-bump]
         (Ok(cur), Ok(rec)) => rec > cur,
-        // Non-parseable: fall back to "update if different"
+        // Non-parsable: fall back to "update if different"
         _ => current != recommended,
     }
 }

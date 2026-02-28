@@ -133,7 +133,7 @@ tokio = "1.40.0"
 // Note: cli.status.no-project is tested via the CLI binary (status_battery_packs
 // calls find_user_manifest which bails when no Cargo.toml exists). That function
 // is private, so we verify the next layer: collect_user_dep_versions errors on
-// unparseable content.
+// unparsable content.
 #[test]
 fn collect_versions_errors_on_invalid_toml() {
     let dir = tempfile::tempdir().unwrap();
