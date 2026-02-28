@@ -60,13 +60,13 @@ fn unwrap_bp_command(cli: bphelper_cli::Cli) -> Option<bphelper_cli::BpCommands>
 
 /// Parsed `Add` fields. Exhaustive destructure so new fields cause a compile error.
 struct ParsedAdd {
-    battery_pack: Option<String>,
+    _battery_pack: Option<String>,
     crates: Vec<String>,
     features: Vec<String>,
-    no_default_features: bool,
-    all_features: bool,
+    _no_default_features: bool,
+    _all_features: bool,
     target: Option<bphelper_cli::AddTarget>,
-    path: Option<String>,
+    _path: Option<String>,
 }
 
 /// Parse args as `cargo bp add ...` and return all Add fields.
@@ -83,13 +83,13 @@ fn parse_add_command(args: &[&str]) -> ParsedAdd {
             target,
             path,
         }) => ParsedAdd {
-            battery_pack,
+            _battery_pack: battery_pack,
             crates,
             features,
-            no_default_features,
-            all_features,
+            _no_default_features: no_default_features,
+            _all_features: all_features,
             target,
-            path,
+            _path: path,
         },
         None => panic!("expected Some(Add), got None"),
         Some(other) => panic!("expected Add, got {:?}", std::mem::discriminant(&other)),
@@ -137,7 +137,14 @@ fn features_comma_separated() {
 #[test]
 fn features_repeated_flag() {
     let add = parse_add_command(&[
-        "cargo", "bp", "add", "cli", "-F", "indicators", "-F", "fancy",
+        "cargo",
+        "bp",
+        "add",
+        "cli",
+        "-F",
+        "indicators",
+        "-F",
+        "fancy",
     ]);
     assert_eq!(add.features, vec!["indicators", "fancy"]);
 }

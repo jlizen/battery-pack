@@ -383,11 +383,11 @@ impl BatteryPackSpec {
                 if self.is_hidden(crate_name) {
                     continue;
                 }
-                if let Some(spec) = self.crates.get(crate_name) {
-                    if seen.insert(crate_name.clone()) {
-                        let is_default = default_crates.contains_key(crate_name);
-                        result.push((feature_name.clone(), crate_name.clone(), spec, is_default));
-                    }
+                if let Some(spec) = self.crates.get(crate_name)
+                    && seen.insert(crate_name.clone())
+                {
+                    let is_default = default_crates.contains_key(crate_name);
+                    result.push((feature_name.clone(), crate_name.clone(), spec, is_default));
                 }
             }
         }
@@ -905,18 +905,18 @@ fn validate_no_extra_code(crate_root: &Path, report: &mut ValidationReport) {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension() {
-                if ext == "rs" && path.file_name().is_some_and(|n| n != "lib.rs") {
-                    report.error(
-                        "format.crate.no-code",
-                        format!(
-                            "src/ contains '{}' — battery packs must not contain functional code",
-                            path.file_name().unwrap().to_string_lossy()
-                        ),
-                    );
-                }
-            }
+        if path.is_file()
+            && let Some(ext) = path.extension()
+            && ext == "rs"
+            && path.file_name().is_some_and(|n| n != "lib.rs")
+        {
+            report.error(
+                "format.crate.no-code",
+                format!(
+                    "src/ contains '{}' — battery packs must not contain functional code",
+                    path.file_name().unwrap().to_string_lossy()
+                ),
+            );
         }
     }
 }
@@ -1327,8 +1327,8 @@ mod tests {
 
         assert_eq!(resolved.len(), 1);
         let tokio = &resolved["tokio"];
-        assert!(tokio.features.contains(&"macros".to_string()));
-        assert!(tokio.features.contains(&"rt".to_string()));
+        assert!(tokio.features.contains("macros"));
+        assert!(tokio.features.contains("rt"));
     }
 
     #[test]
@@ -2299,16 +2299,16 @@ mod tests {
         // tokio: version 1.38.0 (highest), features union, Normal wins
         let tokio = &merged["tokio"];
         assert_eq!(tokio.version, "1.38.0");
-        assert!(tokio.features.contains(&"macros".to_string()));
-        assert!(tokio.features.contains(&"rt".to_string()));
-        assert!(tokio.features.contains(&"net".to_string()));
+        assert!(tokio.features.contains("macros"));
+        assert!(tokio.features.contains("rt"));
+        assert!(tokio.features.contains("net"));
         assert_eq!(tokio.dep_kinds, vec![DepKind::Normal]);
 
         // serde: version 1.0.210 (highest), features union, dev+build = both
         let serde = &merged["serde"];
         assert_eq!(serde.version, "1.0.210");
-        assert!(serde.features.contains(&"derive".to_string()));
-        assert!(serde.features.contains(&"alloc".to_string()));
+        assert!(serde.features.contains("derive"));
+        assert!(serde.features.contains("alloc"));
         assert_eq!(serde.dep_kinds.len(), 2);
         assert!(serde.dep_kinds.contains(&DepKind::Dev));
         assert!(serde.dep_kinds.contains(&DepKind::Build));

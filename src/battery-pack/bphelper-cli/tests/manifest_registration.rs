@@ -329,10 +329,7 @@ fn deps_workspace_adds_to_workspace_deps_table() {
     );
 
     let crate_entry = crate_table.get("serde").unwrap().as_inline_table().unwrap();
-    assert_eq!(
-        crate_entry.get("workspace").unwrap().as_bool().unwrap(),
-        true
-    );
+    assert!(crate_entry.get("workspace").unwrap().as_bool().unwrap());
 }
 
 // ============================================================================
