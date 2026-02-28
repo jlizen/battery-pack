@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: GitHub Security Bug Bounty
+    url: https://bounty.github.com/
+    about: Please report security vulnerabilities here.
+  - name: New Battery Packs and Features
+    url: https://rust-lang.zulipchat.com/#narrow/channel/575623-battery-packs-rs
+    about: Discuss new battery packs and features here.
