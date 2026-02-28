@@ -1,10 +1,13 @@
-//! # logging-bp: Logging Battery Pack
-//!
-//! A curated collection of crates for logging and tracing in Rust.
-//!
-//! ## Included crates
-//!
-//! - **tracing** — structured, async-aware logging
-//! - **tracing-subscriber** — subscriber implementations for tracing
+const SELF_MANIFEST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
 
-include!(concat!(env!("OUT_DIR"), "/facade.rs"));
+/// Validate that the calling crate's dependencies match this battery pack's specs.
+///
+/// Call this from your build.rs:
+/// ```rust,ignore
+/// fn main() {
+///     logging_battery_pack::validate();
+/// }
+/// ```
+pub fn validate() {
+    battery_pack::validate(SELF_MANIFEST);
+}
