@@ -5,6 +5,7 @@ members = [
     "src/battery-pack/bphelper-cli",
     "src/battery-pack/bphelper-manifest",
     "src/error-battery-pack",
+    "src/logging-battery-pack",
 ]
 resolver = "2"
 
