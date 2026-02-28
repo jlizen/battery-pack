@@ -1,3 +1,13 @@
-#![doc = include_str!(concat!(env!("OUT_DIR"), "/docs.md"))]
+const SELF_MANIFEST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
 
-include!(concat!(env!("OUT_DIR"), "/facade.rs"));
+/// Validate that the calling crate's dependencies match this battery pack's specs.
+///
+/// Call this from your build.rs:
+/// ```rust,ignore
+/// fn main() {
+///     cli_battery_pack::validate();
+/// }
+/// ```
+pub fn validate() {
+    battery_pack::validate(SELF_MANIFEST);
+}
