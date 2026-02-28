@@ -822,6 +822,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "error-battery-pack"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "battery-pack",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "expect-test"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
