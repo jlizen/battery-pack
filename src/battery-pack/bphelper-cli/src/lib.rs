@@ -568,6 +568,7 @@ pub fn resolve_add_crates(
 // [impl manifest.features.storage]
 // [impl manifest.deps.add]
 // [impl manifest.deps.version-features]
+#[allow(clippy::too_many_arguments)]
 pub fn add_battery_pack(
     name: &str,
     with_features: &[String],
@@ -927,7 +928,7 @@ fn enable_feature(
     let metadata_location = resolve_metadata_location(&user_manifest_path)?;
     let mut active_features =
         read_active_features_from(&metadata_location, &user_manifest_content, &bp_name);
-    if active_features.contains(&feature_name.to_string()) {
+    if active_features.contains(feature_name) {
         println!(
             "Feature '{}' is already active for {}.",
             feature_name, bp_name
@@ -1203,11 +1204,11 @@ fn write_deps_by_kind(
     for (dep_name, dep_spec) in crates {
         let section = dep_kind_section(dep_spec.dep_kind);
         let table = doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        if let Some(table) = table.as_table_mut() {
-            if !if_missing || !table.contains_key(dep_name) {
-                add_dep_to_table(table, dep_name, dep_spec);
-                written += 1;
-            }
+        if let Some(table) = table.as_table_mut()
+            && (!if_missing || !table.contains_key(dep_name))
+        {
+            add_dep_to_table(table, dep_name, dep_spec);
+            written += 1;
         }
     }
     written
@@ -1228,16 +1229,16 @@ fn write_workspace_refs_by_kind(
     for (dep_name, dep_spec) in crates {
         let section = dep_kind_section(dep_spec.dep_kind);
         let table = doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        if let Some(table) = table.as_table_mut() {
-            if !if_missing || !table.contains_key(dep_name) {
-                let mut dep = toml_edit::InlineTable::new();
-                dep.insert("workspace", toml_edit::Value::from(true));
-                table.insert(
-                    dep_name,
-                    toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
-                );
-                written += 1;
-            }
+        if let Some(table) = table.as_table_mut()
+            && (!if_missing || !table.contains_key(dep_name))
+        {
+            let mut dep = toml_edit::InlineTable::new();
+            dep.insert("workspace", toml_edit::Value::from(true));
+            table.insert(
+                dep_name,
+                toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
+            );
+            written += 1;
         }
     }
     written
@@ -1341,11 +1342,12 @@ pub fn sync_dep_in_table(
         toml_edit::Item::Value(toml_edit::Value::InlineTable(inline)) => {
             // Check version
             // [impl manifest.sync.version-bump]
-            if let Some(toml_edit::Value::String(v)) = inline.get_mut("version") {
-                if !spec.version.is_empty() && should_upgrade_version(v.value(), &spec.version) {
-                    *v = toml_edit::Formatted::new(spec.version.clone());
-                    changed = true;
-                }
+            if let Some(toml_edit::Value::String(v)) = inline.get_mut("version")
+                && !spec.version.is_empty()
+                && should_upgrade_version(v.value(), &spec.version)
+            {
+                *v = toml_edit::Formatted::new(spec.version.clone());
+                changed = true;
             }
             // [impl manifest.sync.feature-add]
             // Check features — add missing ones, never remove existing
@@ -1386,11 +1388,11 @@ pub fn sync_dep_in_table(
             // [impl manifest.sync.version-bump]
             if let Some(toml_edit::Item::Value(toml_edit::Value::String(v))) =
                 tbl.get_mut("version")
+                && !spec.version.is_empty()
+                && should_upgrade_version(v.value(), &spec.version)
             {
-                if !spec.version.is_empty() && should_upgrade_version(v.value(), &spec.version) {
-                    *v = toml_edit::Formatted::new(spec.version.clone());
-                    changed = true;
-                }
+                *v = toml_edit::Formatted::new(spec.version.clone());
+                changed = true;
             }
             // [impl manifest.sync.feature-add]
             if !spec.features.is_empty() {
@@ -2455,16 +2457,16 @@ fn scan_examples(crate_dir: &std::path::Path, repo_tree: Option<&[String]>) -> V
     if let Ok(entries) = std::fs::read_dir(&examples_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "rs") {
-                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                    let description = extract_example_description(&path);
-                    let repo_path = repo_tree.and_then(|tree| find_example_path(tree, name));
-                    examples.push(ExampleInfo {
-                        name: name.to_string(),
-                        description,
-                        repo_path,
-                    });
-                }
+            if path.extension().is_some_and(|ext| ext == "rs")
+                && let Some(name) = path.file_stem().and_then(|s| s.to_str())
+            {
+                let description = extract_example_description(&path);
+                let repo_path = repo_tree.and_then(|tree| find_example_path(tree, name));
+                examples.push(ExampleInfo {
+                    name: name.to_string(),
+                    description,
+                    repo_path,
+                });
             }
         }
     }
@@ -2548,7 +2550,11 @@ fn find_template_path(tree: &[String], template_path: &str) -> Option<String> {
 // [impl cli.status.no-project]
 // [impl cli.source.subcommands]
 // [impl cli.path.subcommands]
-fn status_battery_packs(project_dir: &Path, path: Option<&str>, source: &CrateSource) -> Result<()> {
+fn status_battery_packs(
+    project_dir: &Path,
+    path: Option<&str>,
+    source: &CrateSource,
+) -> Result<()> {
     use console::style;
 
     // [impl cli.status.no-project]

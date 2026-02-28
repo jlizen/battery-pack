@@ -60,13 +60,13 @@ fn read_features(doc: &DocumentMut, dep_name: &str) -> Vec<String> {
         toml_edit::Item::Value(toml_edit::Value::InlineTable(t)) => t
             .get("features")
             .and_then(|v| v.as_array())
-            .map(|arr| extract(arr))
+            .map(&extract)
             .unwrap_or_default(),
         toml_edit::Item::Table(t) => t
             .get("features")
             .and_then(|v| v.as_value())
             .and_then(|v| v.as_array())
-            .map(|arr| extract(arr))
+            .map(extract)
             .unwrap_or_default(),
         toml_edit::Item::Value(toml_edit::Value::String(_)) => vec![],
         other => panic!("unexpected dep format: {:?}", other),

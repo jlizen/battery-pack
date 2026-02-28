@@ -57,11 +57,10 @@ fn read_cargo_toml(tmp: &tempfile::TempDir) -> String {
 /// Extract a TOML section by header name (e.g. "[dependencies]") from raw text.
 /// Returns the section contents including the header, or an empty string if absent.
 fn extract_section(toml_text: &str, section: &str) -> String {
-    let mut lines = toml_text.lines();
     let mut result = String::new();
     let mut in_section = false;
 
-    while let Some(line) = lines.next() {
+    for line in toml_text.lines() {
         if line.trim() == section {
             in_section = true;
             result.push_str(line);
@@ -102,17 +101,28 @@ fn extract_metadata(toml_text: &str, bp_name: &str) -> String {
     }
 }
 
+#[derive(Clone, Copy)]
+enum FeatureMode {
+    Default,
+    NoDefault,
+    All,
+}
+
 /// Helper: call add_battery_pack with common defaults.
 fn add(
     pack_name: &str,
     fixture: &str,
     features: &[&str],
-    no_default_features: bool,
-    all_features: bool,
+    feature_mode: FeatureMode,
     specific_crates: &[&str],
     target: Option<bphelper_cli::AddTarget>,
     project_dir: &std::path::Path,
 ) {
+    let (no_default_features, all_features) = match feature_mode {
+        FeatureMode::Default => (false, false),
+        FeatureMode::NoDefault => (true, false),
+        FeatureMode::All => (false, true),
+    };
     let fixture_path = fixtures_dir().join(fixture);
     let features: Vec<String> = features.iter().map(|s| s.to_string()).collect();
     let specific: Vec<String> = specific_crates.iter().map(|s| s.to_string()).collect();
@@ -142,8 +152,7 @@ fn add_registers_build_dep() {
         "basic",
         "basic-battery-pack",
         &["default"],
-        false,
-        false,
+        FeatureMode::Default,
         &[],
         None,
         tmp.path(),
@@ -175,8 +184,7 @@ fn add_default_crates_basic() {
         "basic",
         "basic-battery-pack",
         &["default"],
-        false,
-        false,
+        FeatureMode::Default,
         &[],
         None,
         tmp.path(),
@@ -205,8 +213,7 @@ fn add_with_named_feature_writes_deps() {
         "fancy",
         "fancy-battery-pack",
         &["indicators"],
-        false,
-        false,
+        FeatureMode::Default,
         &[],
         None,
         tmp.path(),
@@ -233,8 +240,7 @@ fn add_with_named_feature_records_metadata() {
         "fancy",
         "fancy-battery-pack",
         &["indicators"],
-        false,
-        false,
+        FeatureMode::Default,
         &[],
         None,
         tmp.path(),
@@ -265,8 +271,7 @@ fn add_no_default_features_with_feature() {
         "fancy",
         "fancy-battery-pack",
         &["indicators"],
-        true,
-        false,
+        FeatureMode::NoDefault,
         &[],
         None,
         tmp.path(),
@@ -291,8 +296,7 @@ fn add_no_default_features_alone_writes_no_deps() {
         "basic",
         "basic-battery-pack",
         &[],
-        true,
-        false,
+        FeatureMode::NoDefault,
         &[],
         None,
         tmp.path(),
@@ -316,8 +320,7 @@ fn add_all_features_basic() {
         "basic",
         "basic-battery-pack",
         &[],
-        false,
-        true,
+        FeatureMode::All,
         &[],
         None,
         tmp.path(),
@@ -343,8 +346,7 @@ fn add_all_features_records_metadata() {
         "basic",
         "basic-battery-pack",
         &[],
-        false,
-        true,
+        FeatureMode::All,
         &[],
         None,
         tmp.path(),
@@ -368,8 +370,7 @@ fn add_all_features_fancy() {
         "fancy",
         "fancy-battery-pack",
         &[],
-        false,
-        true,
+        FeatureMode::All,
         &[],
         None,
         tmp.path(),
@@ -421,8 +422,7 @@ fn add_specific_crates_writes_only_named() {
         "fancy",
         "fancy-battery-pack",
         &[],
-        false,
-        false,
+        FeatureMode::Default,
         &["clap"],
         None,
         tmp.path(),
@@ -450,8 +450,7 @@ fn add_unknown_crate_writes_valid_ones() {
         "fancy",
         "fancy-battery-pack",
         &[],
-        false,
-        false,
+        FeatureMode::Default,
         &["nonexistent", "clap"],
         None,
         tmp.path(),
@@ -479,8 +478,7 @@ fn add_target_package_writes_metadata() {
         "basic",
         "basic-battery-pack",
         &["default"],
-        false,
-        false,
+        FeatureMode::Default,
         &[],
         Some(bphelper_cli::AddTarget::Package),
         tmp.path(),
@@ -508,8 +506,7 @@ fn add_creates_build_rs() {
         "basic",
         "basic-battery-pack",
         &["default"],
-        false,
-        false,
+        FeatureMode::Default,
         &[],
         None,
         tmp.path(),
@@ -537,8 +534,7 @@ fn add_twice_is_idempotent() {
         "basic",
         "basic-battery-pack",
         &["default"],
-        false,
-        false,
+        FeatureMode::Default,
         &[],
         None,
         tmp.path(),
@@ -549,8 +545,7 @@ fn add_twice_is_idempotent() {
         "basic",
         "basic-battery-pack",
         &["default"],
-        false,
-        false,
+        FeatureMode::Default,
         &[],
         None,
         tmp.path(),

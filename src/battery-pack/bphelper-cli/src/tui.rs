@@ -6,7 +6,6 @@ use crate::{
 };
 use anyhow::Result;
 use bphelper_manifest::DepKind;
-use std::collections::{BTreeMap, BTreeSet};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     Frame,
@@ -15,6 +14,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -53,6 +53,7 @@ struct App {
 
 /// A single crate being added or updated.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct CrateChange {
     name: String,
     dep_kind: DepKind,
@@ -336,9 +337,10 @@ impl InstalledPackState {
                 continue; // This feature doesn't include the crate
             }
             // This feature includes the crate — check if it has other enabled crates
-            let has_other_enabled = self.entries.iter().any(|e| {
-                e.enabled && e.name != crate_name && crate_set.contains(&e.name)
-            });
+            let has_other_enabled = self
+                .entries
+                .iter()
+                .any(|e| e.enabled && e.name != crate_name && crate_set.contains(&e.name));
             if has_other_enabled {
                 return true;
             }
@@ -578,7 +580,7 @@ fn build_installed_state(packs: Vec<InstalledPack>) -> InstalledState {
                 .into_iter()
                 .map(|(group, crate_name, dep, _is_default)| {
                     let is_enabled = resolved.contains_key(&crate_name);
-                    CrateEntry::new(group, crate_name, &dep, is_enabled, is_enabled)
+                    CrateEntry::new(group, crate_name, dep, is_enabled, is_enabled)
                 })
                 .collect();
 
@@ -607,7 +609,7 @@ fn build_expanded_pack(
     let entries = grouped
         .into_iter()
         .map(|(group, crate_name, dep, is_default)| {
-            CrateEntry::new(group, crate_name, &dep, is_default, false)
+            CrateEntry::new(group, crate_name, dep, is_default, false)
         })
         .collect();
 
@@ -726,18 +728,18 @@ impl App {
                 continue;
             }
 
-            if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    // Windows compatibility: only handle Press events
-                    if key.kind == KeyEventKind::Press {
-                        // Ctrl+C quits immediately
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && key.code == KeyCode::Char('c')
-                        {
-                            break;
-                        }
-                        self.handle_key(key.code);
+            if event::poll(Duration::from_millis(100))?
+                && let Event::Key(key) = event::read()?
+            {
+                // Windows compatibility: only handle Press events
+                if key.kind == KeyEventKind::Press {
+                    // Ctrl+C quits immediately
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c')
+                    {
+                        break;
                     }
+                    self.handle_key(key.code);
                 }
             }
 
@@ -747,12 +749,12 @@ impl App {
         }
 
         // Apply any pending add changes after TUI exits
-        if let Screen::Add(add_screen) = &mut self.screen {
-            if let Some(changes) = add_screen.changes.take() {
-                // Restore terminal before applying changes so output is visible.
-                ratatui::restore();
-                apply_add_changes(&changes)?;
-            }
+        if let Screen::Add(add_screen) = &mut self.screen
+            && let Some(changes) = add_screen.changes.take()
+        {
+            // Restore terminal before applying changes so output is visible.
+            ratatui::restore();
+            apply_add_changes(&changes)?;
         }
 
         Ok(())
@@ -856,58 +858,50 @@ impl App {
             LoadingTarget::BrowseList {
                 mut add_screen,
                 filter,
-            } => {
-                match fetch_battery_pack_list(&self.source, filter.as_deref()) {
-                    Ok(items) => {
-                        let has_items = !items.is_empty();
-                        add_screen.browse.items = items;
-                        add_screen.browse.list_state = ListState::default();
-                        if has_items {
-                            add_screen.browse.list_state.select(Some(0));
-                        }
-                        add_screen.tab = AddTab::Browse;
-                        self.screen = Screen::Add(add_screen);
+            } => match fetch_battery_pack_list(&self.source, filter.as_deref()) {
+                Ok(items) => {
+                    let has_items = !items.is_empty();
+                    add_screen.browse.items = items;
+                    add_screen.browse.list_state = ListState::default();
+                    if has_items {
+                        add_screen.browse.list_state.select(Some(0));
                     }
-                    Err(e) => {
-                        self.screen = Screen::Error(ErrorScreen {
-                            message: format!("{e}"),
-                            retry_target: LoadingTarget::BrowseList {
-                                add_screen,
-                                filter,
-                            },
-                        });
-                    }
+                    add_screen.tab = AddTab::Browse;
+                    self.screen = Screen::Add(add_screen);
                 }
-            }
+                Err(e) => {
+                    self.screen = Screen::Error(ErrorScreen {
+                        message: format!("{e}"),
+                        retry_target: LoadingTarget::BrowseList { add_screen, filter },
+                    });
+                }
+            },
             LoadingTarget::BrowseExpand {
                 mut add_screen,
                 bp_name,
                 bp_short_name,
-            } => {
-                match crate::fetch_bp_spec(&self.source, &bp_name) {
-                    Ok((_version, spec)) => {
-                        let summary = BatteryPackSummary {
-                            name: bp_name,
-                            short_name: bp_short_name,
-                            version: spec.version.clone(),
-                            description: String::new(),
-                        };
-                        add_screen.browse.expanded =
-                            Some(build_expanded_pack(&summary, spec));
-                        self.screen = Screen::Add(add_screen);
-                    }
-                    Err(e) => {
-                        self.screen = Screen::Error(ErrorScreen {
-                            message: format!("{e}"),
-                            retry_target: LoadingTarget::BrowseExpand {
-                                add_screen,
-                                bp_name,
-                                bp_short_name,
-                            },
-                        });
-                    }
+            } => match crate::fetch_bp_spec(&self.source, &bp_name) {
+                Ok((_version, spec)) => {
+                    let summary = BatteryPackSummary {
+                        name: bp_name,
+                        short_name: bp_short_name,
+                        version: spec.version.clone(),
+                        description: String::new(),
+                    };
+                    add_screen.browse.expanded = Some(build_expanded_pack(&summary, spec));
+                    self.screen = Screen::Add(add_screen);
                 }
-            }
+                Err(e) => {
+                    self.screen = Screen::Error(ErrorScreen {
+                        message: format!("{e}"),
+                        retry_target: LoadingTarget::BrowseExpand {
+                            add_screen,
+                            bp_name,
+                            bp_short_name,
+                        },
+                    });
+                }
+            },
         }
     }
 
@@ -1146,17 +1140,17 @@ impl App {
                 }
             }
             Action::ListSelect(selected) => {
-                if let Screen::List(state) = &self.screen {
-                    if let Some(bp) = state.items.get(selected) {
-                        self.screen = Screen::Loading(LoadingState {
-                            message: format!("Loading {}...", bp.short_name),
-                            target: LoadingTarget::Detail {
-                                name: bp.name.clone(),
-                                path: None,
-                                came_from_list: true,
-                            },
-                        });
-                    }
+                if let Screen::List(state) = &self.screen
+                    && let Some(bp) = state.items.get(selected)
+                {
+                    self.screen = Screen::Loading(LoadingState {
+                        message: format!("Loading {}...", bp.short_name),
+                        target: LoadingTarget::Detail {
+                            name: bp.name.clone(),
+                            path: None,
+                            came_from_list: true,
+                        },
+                    });
                 }
             }
             Action::DetailNext => {
@@ -1271,12 +1265,12 @@ impl App {
                 }
             }
             Action::FormBackspace => {
-                if let Screen::NewProjectForm(state) = &mut self.screen {
-                    if state.cursor_position > 0 {
-                        let pos = state.cursor_position - 1;
-                        state.focused_field_mut().remove(pos);
-                        state.cursor_position -= 1;
-                    }
+                if let Screen::NewProjectForm(state) = &mut self.screen
+                    && state.cursor_position > 0
+                {
+                    let pos = state.cursor_position - 1;
+                    state.focused_field_mut().remove(pos);
+                    state.cursor_position -= 1;
                 }
             }
             Action::FormDelete => {
@@ -1293,10 +1287,10 @@ impl App {
                 }
             }
             Action::FormRight => {
-                if let Screen::NewProjectForm(state) = &mut self.screen {
-                    if state.cursor_position < state.focused_field_len() {
-                        state.cursor_position += 1;
-                    }
+                if let Screen::NewProjectForm(state) = &mut self.screen
+                    && state.cursor_position < state.focused_field_len()
+                {
+                    state.cursor_position += 1;
                 }
             }
             Action::FormHome => {
@@ -1439,30 +1433,34 @@ impl App {
                 } else {
                     match key {
                         KeyCode::Up | KeyCode::Char('k') => {
-                            list_nav(&mut state.browse.list_state, state.browse.items.len(), false);
+                            list_nav(
+                                &mut state.browse.list_state,
+                                state.browse.items.len(),
+                                false,
+                            );
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             list_nav(&mut state.browse.list_state, state.browse.items.len(), true);
                         }
                         KeyCode::Enter => {
-                            if let Some(selected) = state.browse.list_state.selected() {
-                                if let Some(bp) = state.browse.items.get(selected) {
-                                    let already_installed =
-                                        state.installed.packs.iter().any(|p| p.name == bp.name);
-                                    if already_installed {
-                                        state.tab = AddTab::Installed;
-                                    } else {
-                                        let bp_name = bp.name.clone();
-                                        let bp_short_name = bp.short_name.clone();
-                                        self.take_add_screen_for_loading(
-                                            "Loading battery pack...",
-                                            |s| LoadingTarget::BrowseExpand {
-                                                add_screen: s,
-                                                bp_name,
-                                                bp_short_name,
-                                            },
-                                        );
-                                    }
+                            if let Some(selected) = state.browse.list_state.selected()
+                                && let Some(bp) = state.browse.items.get(selected)
+                            {
+                                let already_installed =
+                                    state.installed.packs.iter().any(|p| p.name == bp.name);
+                                if already_installed {
+                                    state.tab = AddTab::Installed;
+                                } else {
+                                    let bp_name = bp.name.clone();
+                                    let bp_short_name = bp.short_name.clone();
+                                    self.take_add_screen_for_loading(
+                                        "Loading battery pack...",
+                                        |s| LoadingTarget::BrowseExpand {
+                                            add_screen: s,
+                                            bp_name,
+                                            bp_short_name,
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -1554,8 +1552,7 @@ fn render_error(frame: &mut Frame, state: &ErrorScreen) {
 
     let paragraph = Paragraph::new(error_text).centered();
 
-    let vertical =
-        Layout::vertical([Constraint::Length(5)]).flex(Flex::Center);
+    let vertical = Layout::vertical([Constraint::Length(5)]).flex(Flex::Center);
     let [center] = vertical.areas(area);
     frame.render_widget(paragraph, center);
 }
@@ -3476,11 +3473,7 @@ mod tests {
 
     /// Helper: render into an in-memory terminal and return the buffer content
     /// as a string (one line per row, padded with spaces).
-    fn render_to_string(
-        width: u16,
-        height: u16,
-        draw: impl FnOnce(&mut Frame),
-    ) -> String {
+    fn render_to_string(width: u16, height: u16, draw: impl FnOnce(&mut Frame)) -> String {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -3632,9 +3625,10 @@ mod tests {
     /// as a top-level tab.
     #[test]
     fn render_add_screen_shows_section_tabs() {
-        let mut state = make_add_screen(vec![
-            make_installed_pack("web", vec![make_entry("axum", true, true)]),
-        ]);
+        let mut state = make_add_screen(vec![make_installed_pack(
+            "web",
+            vec![make_entry("axum", true, true)],
+        )]);
         let output = render_add_to_string(&mut state, 60, 15);
         assert!(
             output.contains("Installed"),
