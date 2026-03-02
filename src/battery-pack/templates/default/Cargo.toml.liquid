@@ -23,6 +23,6 @@ battery-pack = "0.4"
 # default = ["clap", "serde"]
 # json = ["serde_json"]
 
-# Optional: hide internal dependencies from users
-# [package.metadata.battery-pack]
-# hidden = ["serde*"]
+[package.metadata.battery-pack]
+hidden = ["battery-pack"]
+# hidden = ["serde*"]  # globs are supported

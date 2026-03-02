@@ -122,11 +122,13 @@ of `macros` and `rt`. Feature merging is always additive.
 ## Hidden dependencies
 
 If your battery pack has dependencies that are internal tooling — not
-something users would want to install — mark them as hidden:
+something users would want to install — mark them as hidden. Every
+battery pack should hide the `battery-pack` build dependency (used for
+doc generation), along with any other internal crates:
 
 ```toml
 [package.metadata.battery-pack]
-hidden = ["handlebars", "cargo-metadata"]
+hidden = ["battery-pack", "handlebars", "cargo-metadata"]
 ```
 
 Hidden crates don't appear in the TUI or in `cargo bp show` output.
