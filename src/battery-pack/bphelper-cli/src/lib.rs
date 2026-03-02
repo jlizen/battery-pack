@@ -1756,19 +1756,30 @@ fn generate_from_local(
     generate_from_path(local_path, &template_path, name)
 }
 
+/// Resolve the project name, prompting interactively if not provided, and
+/// ensure it ends with `-battery-pack`.
+fn ensure_battery_pack_suffix(name: Option<String>) -> Result<String> {
+    let raw = match name {
+        Some(n) => n,
+        None => dialoguer::Input::<String>::new()
+            .with_prompt("Project name")
+            .interact_text()
+            .context("Failed to read project name")?,
+    };
+    if raw.ends_with("-battery-pack") {
+        Ok(raw)
+    } else {
+        let fixed = format!("{}-battery-pack", raw);
+        println!("Renaming project to: {}", fixed);
+        Ok(fixed)
+    }
+}
+
 fn generate_from_path(crate_path: &Path, template_path: &str, name: Option<String>) -> Result<()> {
-    // Ensure the project name ends with -battery-pack when provided via --name.
-    // When name is None, cargo-generate prompts interactively and the rhai
-    // pre-script hook handles the suffix.
-    let name = name.map(|n| {
-        if n.ends_with("-battery-pack") {
-            n
-        } else {
-            let fixed = format!("{}-battery-pack", n);
-            println!("Renaming project to: {}", fixed);
-            fixed
-        }
-    });
+    // Ensure the project name ends with -battery-pack.
+    // We always resolve the name before calling cargo-generate so the suffix
+    // applies to both the directory name and the project-name variable.
+    let name = Some(ensure_battery_pack_suffix(name)?);
 
     // In non-interactive mode, provide defaults for placeholders
     let define = if !std::io::stdout().is_terminal() {
