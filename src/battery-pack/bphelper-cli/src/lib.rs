@@ -1757,6 +1757,19 @@ fn generate_from_local(
 }
 
 fn generate_from_path(crate_path: &Path, template_path: &str, name: Option<String>) -> Result<()> {
+    // Ensure the project name ends with -battery-pack when provided via --name.
+    // When name is None, cargo-generate prompts interactively and the rhai
+    // pre-script hook handles the suffix.
+    let name = name.map(|n| {
+        if n.ends_with("-battery-pack") {
+            n
+        } else {
+            let fixed = format!("{}-battery-pack", n);
+            println!("Renaming project to: {}", fixed);
+            fixed
+        }
+    });
+
     // In non-interactive mode, provide defaults for placeholders
     let define = if !std::io::stdout().is_terminal() {
         vec!["description=A battery pack for ...".to_string()]
