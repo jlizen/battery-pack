@@ -1,3 +1,3 @@
-{{readme}}
+{% raw %}{{readme}}
 
-{{crate-table}}
+{{crate-table}}{% endraw %}
