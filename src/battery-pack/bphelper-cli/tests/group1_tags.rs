@@ -304,3 +304,76 @@ features = ["default"]
         BTreeSet::from(["default".to_string(), "indicators".to_string()])
     );
 }
+
+// ============================================================================
+// cli.show.non-interactive / cli.list.non-interactive
+// ============================================================================
+
+// [verify cli.show.non-interactive]
+#[test]
+fn show_non_interactive_flag_is_parsed() {
+    let cli =
+        bphelper_cli::Cli::try_parse_from(["cargo", "bp", "show", "cli", "--non-interactive"])
+            .expect("--non-interactive should be accepted");
+
+    match unwrap_bp_command(cli) {
+        Some(bphelper_cli::BpCommands::Show {
+            non_interactive, ..
+        }) => {
+            assert!(non_interactive, "non_interactive should be true");
+        }
+        None => panic!("expected Some(Show), got None"),
+        Some(other) => panic!("expected Show, got {:?}", std::mem::discriminant(&other)),
+    }
+}
+
+// [verify cli.show.non-interactive]
+#[test]
+fn show_defaults_to_interactive() {
+    let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "show", "cli"])
+        .expect("show without --non-interactive should parse");
+
+    match unwrap_bp_command(cli) {
+        Some(bphelper_cli::BpCommands::Show {
+            non_interactive, ..
+        }) => {
+            assert!(!non_interactive, "non_interactive should default to false");
+        }
+        None => panic!("expected Some(Show), got None"),
+        Some(other) => panic!("expected Show, got {:?}", std::mem::discriminant(&other)),
+    }
+}
+
+// [verify cli.list.non-interactive]
+#[test]
+fn list_non_interactive_flag_is_parsed() {
+    let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "list", "--non-interactive"])
+        .expect("--non-interactive should be accepted");
+
+    match unwrap_bp_command(cli) {
+        Some(bphelper_cli::BpCommands::List {
+            non_interactive, ..
+        }) => {
+            assert!(non_interactive, "non_interactive should be true");
+        }
+        None => panic!("expected Some(List), got None"),
+        Some(other) => panic!("expected List, got {:?}", std::mem::discriminant(&other)),
+    }
+}
+
+// [verify cli.list.non-interactive]
+#[test]
+fn list_defaults_to_interactive() {
+    let cli = bphelper_cli::Cli::try_parse_from(["cargo", "bp", "list"])
+        .expect("list without --non-interactive should parse");
+
+    match unwrap_bp_command(cli) {
+        Some(bphelper_cli::BpCommands::List {
+            non_interactive, ..
+        }) => {
+            assert!(!non_interactive, "non_interactive should default to false");
+        }
+        None => panic!("expected Some(List), got None"),
+        Some(other) => panic!("expected List, got {:?}", std::mem::discriminant(&other)),
+    }
+}
