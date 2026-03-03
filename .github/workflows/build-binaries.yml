@@ -82,6 +82,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: cargo-bp-${{ matrix.target }}-${{ steps.version.outputs.version }}.${{ matrix.archive }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
 
       - name: Upload artifact (for workflow_dispatch)
         if: github.event_name == 'workflow_dispatch'
