@@ -114,9 +114,19 @@ with a `path` and `description`:
 default = { path = "templates/default", description = "A basic starting point" }
 ```
 
-r[format.templates.cargo-generate]
-Templates use the [cargo-generate](https://github.com/cargo-generate/cargo-generate)
-format. Each template directory MUST contain a `cargo-generate.toml`.
+r[format.templates.engine]
+Templates use [MiniJinja](https://github.com/mitsuhiko/minijinja)
+for rendering. Each template directory MAY contain a `bp-template.toml`
+to configure placeholders and ignored paths.
+
+r[format.templates.builtin-variables]
+The template engine provides the following built-in variables:
+
+- `project_name` — the project name passed via `--name` (kebab-case)
+- `crate_name` — derived from `project_name` by replacing `-` with `_`
+
+These are available in all template files without declaring them as
+placeholders.
 
 r[format.templates.selection]
 If a battery pack has multiple templates, `cargo bp new` MUST prompt
@@ -124,7 +134,7 @@ the user to select one (unless `--template` is specified).
 
 r[format.templates.placeholder-defaults]
 Template placeholders SHOULD define a `default` value in
-`cargo-generate.toml` so that templates can be validated
+`bp-template.toml` so that templates can be validated
 non-interactively by `cargo bp validate`.
 
 ## Examples

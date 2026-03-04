@@ -132,15 +132,15 @@ duplicate entries. If the battery pack is already present,
 
 r[cli.new.template]
 `cargo bp new <pack>` MUST create a new project from the battery
-pack's template using cargo-generate.
+pack's template using the built-in template engine.
 
 r[cli.new.name-flag]
 `cargo bp new <pack> --name <name>` MUST pass the project name
-to cargo-generate, skipping the name prompt.
+to the template engine, skipping the name prompt.
 
 r[cli.new.name-prompt]
 If `--name` is not provided, the CLI MUST prompt the user for
-a project name (via cargo-generate).
+a project name.
 
 r[cli.new.template-select]
 If the battery pack has multiple templates and `--template` is not

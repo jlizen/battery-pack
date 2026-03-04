@@ -1,7 +1,6 @@
 //! CLI for battery-pack: create and manage battery packs.
 
 use anyhow::{Context, Result, bail};
-use cargo_generate::{GenerateArgs, TemplatePath, Vcs};
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
 use serde::Deserialize;
@@ -10,6 +9,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tar::Archive;
 
+pub mod template_engine;
 mod tui;
 
 const CRATES_IO_API: &str = "https://crates.io/api/v1/crates";
@@ -1777,30 +1777,20 @@ fn ensure_battery_pack_suffix(name: Option<String>) -> Result<String> {
 
 fn generate_from_path(crate_path: &Path, template_path: &str, name: Option<String>) -> Result<()> {
     // Ensure the project name ends with -battery-pack.
-    // We always resolve the name before calling cargo-generate so the suffix
+    // We always resolve the name before calling the template engine so the suffix
     // applies to both the directory name and the project-name variable.
-    let name = Some(ensure_battery_pack_suffix(name)?);
+    let project_name = ensure_battery_pack_suffix(name)?;
 
-    // In non-interactive mode, provide defaults for placeholders
-    let define = if !std::io::stdout().is_terminal() {
-        vec!["description=A battery pack for ...".to_string()]
-    } else {
-        vec![]
+    let opts = template_engine::GenerateOpts {
+        crate_root: crate_path.to_path_buf(),
+        template_path: template_path.to_string(),
+        project_name,
+        destination: None,
+        defines: std::collections::BTreeMap::new(),
+        git_init: true,
     };
 
-    let args = GenerateArgs {
-        template_path: TemplatePath {
-            path: Some(crate_path.to_string_lossy().into_owned()),
-            auto_path: Some(template_path.to_string()),
-            ..Default::default()
-        },
-        name,
-        vcs: Some(Vcs::Git),
-        define,
-        ..Default::default()
-    };
-
-    cargo_generate::generate(args)?;
+    template_engine::generate(opts)?;
 
     Ok(())
 }
@@ -2892,20 +2882,16 @@ pub fn validate_templates(manifest_dir: &str) -> Result<()> {
 
         let project_name = format!("bp-validate-{name}");
 
-        let args = GenerateArgs {
-            template_path: TemplatePath {
-                path: Some(manifest_dir.to_string_lossy().into_owned()),
-                auto_path: Some(template.path.clone()),
-                ..Default::default()
-            },
-            name: Some(project_name),
+        let opts = template_engine::GenerateOpts {
+            crate_root: manifest_dir.to_path_buf(),
+            template_path: template.path.clone(),
+            project_name,
             destination: Some(tmp.path().to_path_buf()),
-            vcs: Some(Vcs::None),
-            silent: true,
-            ..Default::default()
+            defines: std::collections::BTreeMap::new(),
+            git_init: false,
         };
 
-        let project_dir = cargo_generate::generate(args)
+        let project_dir = template_engine::generate(opts)
             .with_context(|| format!("failed to generate template '{name}'"))?;
 
         // Patch crates-io deps to use local workspace packages so we validate

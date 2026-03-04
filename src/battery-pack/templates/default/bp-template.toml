@@ -1,9 +1,4 @@
-[template]
-cargo_generate_version = ">=0.22.0"
 ignore = ["hooks"]
-
-[hooks]
-pre = ["hooks/pre-script.rhai"]
 
 [placeholders.description]
 type = "string"
