@@ -33,12 +33,7 @@ struct PlaceholderDef {
     prompt: Option<String>,
     #[serde(default)]
     default: Option<String>,
-    // TODO: support more types (bool, etc).
     #[serde(default, rename = "type")]
-    #[expect(
-        dead_code,
-        reason = "validated at parse time via enum; not branched on yet"
-    )]
     placeholder_type: PlaceholderType,
 }
 
@@ -57,26 +52,26 @@ struct FileInclude {
 }
 
 /// Options for template generation.
-pub struct GenerateOpts {
+pub(crate) struct GenerateOpts {
     /// The battery pack crate root (contains `templates/` dir).
-    pub crate_root: PathBuf,
+    pub(crate) crate_root: PathBuf,
     /// Relative path to the template dir within the crate (e.g. `templates/default`).
-    pub template_path: String,
+    pub(crate) template_path: String,
     /// Project name (kebab-case).
-    pub project_name: String,
+    pub(crate) project_name: String,
     /// Output directory. The project will be created as a subdirectory named `project_name`.
     /// If `None`, uses the current directory.
-    pub destination: Option<PathBuf>,
+    pub(crate) destination: Option<PathBuf>,
     /// Pre-set placeholder values (skip prompting for these).
-    pub defines: BTreeMap<String, String>,
+    pub(crate) defines: BTreeMap<String, String>,
     /// Whether to run `git init` on the generated project.
-    pub git_init: bool,
+    pub(crate) git_init: bool,
 }
 
 /// Generate a project from a battery pack template.
 ///
 /// Returns the path to the generated project directory.
-pub fn generate(opts: GenerateOpts) -> Result<PathBuf> {
+pub(crate) fn generate(opts: GenerateOpts) -> Result<PathBuf> {
     let template_dir = opts.crate_root.join(&opts.template_path);
     if !template_dir.is_dir() {
         bail!("template directory not found: {}", template_dir.display());
@@ -106,9 +101,7 @@ pub fn generate(opts: GenerateOpts) -> Result<PathBuf> {
     std::fs::create_dir_all(&project_dir)
         .with_context(|| format!("failed to create {}", project_dir.display()))?;
 
-    // Build the ignore set (always includes bp-template.toml itself)
-    let mut ignore_set: Vec<&str> = config.ignore.iter().map(|s| s.as_str()).collect();
-    ignore_set.push("bp-template.toml");
+    let ignore_set: Vec<&str> = config.ignore.iter().map(|s| s.as_str()).collect();
 
     // Walk template directory and render files
     render_template_dir(&env, &template_dir, &project_dir, &ignore_set, &variables)?;
@@ -166,29 +159,40 @@ fn resolve_placeholders(
     let interactive = std::io::stdout().is_terminal();
 
     for (name, def) in defs {
+        // MiniJinja parses `-` as the minus operator, so kebab-case names
+        // would be silently unreachable in templates without extra user handling.
+        // better to avoid the footgun.
+        if name.contains('-') {
+            bail!(
+                "placeholder '{name}' contains '-'; use snake_case (MiniJinja treats '-' as minus)"
+            );
+        }
+
         // Check pre-set overrides first
         if let Some(value) = defines.get(name) {
             variables.insert(name.clone(), value.clone());
             continue;
         }
 
-        if interactive {
-            let prompt = def.prompt.as_deref().unwrap_or(name);
-            let mut builder = dialoguer::Input::<String>::new().with_prompt(prompt);
-            if let Some(default) = &def.default {
-                builder = builder.default(default.clone());
+        let value = match def.placeholder_type {
+            PlaceholderType::String => {
+                if interactive {
+                    let prompt = def.prompt.as_deref().unwrap_or(name);
+                    let mut builder = dialoguer::Input::<String>::new().with_prompt(prompt);
+                    if let Some(default) = &def.default {
+                        builder = builder.default(default.clone());
+                    }
+                    builder
+                        .interact_text()
+                        .with_context(|| format!("failed to read placeholder '{name}'"))?
+                } else {
+                    def.default.clone().ok_or_else(|| {
+                        anyhow::anyhow!("placeholder '{name}' has no default and no value provided")
+                    })?
+                }
             }
-            let value = builder
-                .interact_text()
-                .with_context(|| format!("failed to read placeholder '{name}'"))?;
-            variables.insert(name.clone(), value);
-        } else {
-            // Non-interactive: use default or fail
-            let value = def.default.clone().ok_or_else(|| {
-                anyhow::anyhow!("placeholder '{name}' has no default and no value provided")
-            })?;
-            variables.insert(name.clone(), value);
-        }
+        };
+        variables.insert(name.clone(), value);
     }
     Ok(())
 }
@@ -240,15 +244,23 @@ fn render_template_dir(
             continue;
         }
 
+        // The root bp-template.toml is the engine's own config and is never
+        // included in output. Nested bp-template.toml files (e.g. inside a
+        // scaffolded template directory) pass through normally.
+        if rel_path == Path::new("bp-template.toml") {
+            continue;
+        }
+
+        // Render template variables in the path (e.g. {{crate_name}}/mod.rs)
+        let rendered_path = env.render_str(&rel_path.to_string_lossy(), minijinja::context! {})?;
+
         if entry.file_type().is_dir() {
-            let dest = output_dir.join(rel_path);
+            let dest = output_dir.join(&rendered_path);
             std::fs::create_dir_all(&dest)?;
             continue;
         }
 
-        // Render the filename itself (may contain template variables)
-        let dest_rel = render_path(rel_path, variables)?;
-        let dest = output_dir.join(&dest_rel);
+        let dest = output_dir.join(&rendered_path);
 
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
@@ -276,21 +288,6 @@ fn should_ignore(rel_path: &Path, ignore_set: &[&str]) -> bool {
         }
     }
     false
-}
-
-/// Render template variables in a file path.
-fn render_path(rel_path: &Path, variables: &BTreeMap<String, String>) -> Result<PathBuf> {
-    let path_str = rel_path.to_string_lossy();
-
-    // Substitute known variables in the path
-    let mut rendered = path_str.to_string();
-    for (key, value) in variables {
-        // Support both {{ var }} and {{var}} in filenames
-        rendered = rendered.replace(&format!("{{{{{key}}}}}"), value);
-        rendered = rendered.replace(&format!("{{{{ {key} }}}}"), value);
-    }
-
-    Ok(PathBuf::from(rendered))
 }
 
 fn git_init(project_dir: &Path) -> Result<()> {
@@ -395,41 +392,13 @@ mod tests {
 
     #[test]
     fn ignore_bp_template_toml() {
-        assert!(should_ignore(
-            Path::new("bp-template.toml"),
-            &["bp-template.toml"]
+        // bp-template.toml is excluded by a root-only check in render_template_dir,
+        // NOT via should_ignore. Nested bp-template.toml files pass through.
+        assert!(!should_ignore(Path::new("bp-template.toml"), &["hooks"]));
+        assert!(!should_ignore(
+            Path::new("templates/default/bp-template.toml"),
+            &["hooks"]
         ));
-    }
-
-    // -- render_path --
-
-    #[test]
-    fn render_path_no_variables() {
-        let vars = BTreeMap::new();
-        assert_eq!(
-            render_path(Path::new("src/main.rs"), &vars).unwrap(),
-            PathBuf::from("src/main.rs")
-        );
-    }
-
-    #[test]
-    fn render_path_with_braces() {
-        let mut vars = BTreeMap::new();
-        vars.insert("project_name".to_string(), "my-app".to_string());
-        assert_eq!(
-            render_path(Path::new("{{project_name}}/Cargo.toml"), &vars).unwrap(),
-            PathBuf::from("my-app/Cargo.toml")
-        );
-    }
-
-    #[test]
-    fn render_path_with_spaced_braces() {
-        let mut vars = BTreeMap::new();
-        vars.insert("project_name".to_string(), "my-app".to_string());
-        assert_eq!(
-            render_path(Path::new("{{ project_name }}/Cargo.toml"), &vars).unwrap(),
-            PathBuf::from("my-app/Cargo.toml")
-        );
     }
 
     // -- resolve_placeholders --

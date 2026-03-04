@@ -9,7 +9,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tar::Archive;
 
-pub mod template_engine;
+pub(crate) mod template_engine;
 mod tui;
 
 const CRATES_IO_API: &str = "https://crates.io/api/v1/crates";

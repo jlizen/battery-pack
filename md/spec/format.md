@@ -119,10 +119,31 @@ Templates use [MiniJinja](https://github.com/mitsuhiko/minijinja)
 for rendering. Each template directory MAY contain a `bp-template.toml`
 to configure placeholders and ignored paths.
 
+r[format.templates.config-excluded]
+The root `bp-template.toml` is the engine's configuration file and
+MUST NOT be included in generated output. A `bp-template.toml` nested
+inside a subdirectory (e.g. a scaffolded inner template) MUST be
+included in the output normally.
+
+r[format.templates.ignore]
+The `ignore` list in `bp-template.toml` specifies files and folders
+to exclude from generated output entirely. Entries are matched by
+exact name against any path component, so `ignore = ["hooks"]`
+excludes a `hooks/` directory at any depth. Wildcards are not
+supported.
+
+r[format.templates.files]
+The `[[files]]` array in `bp-template.toml` copies files from outside
+the template directory into the generated project. Each entry has a
+`src` path (relative to the crate root) and a `dest` path (relative
+to the generated project root). Source files are rendered through the
+template engine. Existing files from the template directory are not
+overwritten.
+
 r[format.templates.builtin-variables]
 The template engine provides the following built-in variables:
 
-- `project_name` — the project name passed via `--name` (kebab-case)
+- `project_name` — the project name passed via `--name`
 - `crate_name` — derived from `project_name` by replacing `-` with `_`
 
 These are available in all template files without declaring them as
@@ -136,6 +157,11 @@ r[format.templates.placeholder-defaults]
 Template placeholders SHOULD define a `default` value in
 `bp-template.toml` so that templates can be validated
 non-interactively by `cargo bp validate`.
+
+r[format.templates.placeholder-names]
+Placeholder names MUST use snake_case. Names containing `-` are
+rejected because MiniJinja parses `-` as the minus operator, making
+such variables unreachable in template expressions.
 
 ## Examples
 

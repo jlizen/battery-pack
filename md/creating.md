@@ -189,12 +189,23 @@ default = "A new project"
 ```
 
 Placeholders should have `default` values so that `cargo bp validate`
-can generate and check templates non-interactively.
+can generate and check templates non-interactively. Placeholder names
+must use snake_case (`description`, not `my-description`) because
+MiniJinja treats `-` as the minus operator.
 
 The template engine also provides built-in variables (no declaration needed):
 
-- `{{ project_name }}` — the project name (kebab-case, e.g. `my-battery-pack`)
+- `{{ project_name }}` — the project name passed via `--name`
 - `{{ crate_name }}` — derived from `project_name` with `-` replaced by `_`
+
+To include files from outside the template directory (e.g. shared
+license files), use `[[files]]`:
+
+```toml
+[[files]]
+src = "LICENSE-MIT"       # relative to crate root
+dest = "LICENSE-MIT"      # relative to generated project
+```
 
 Register templates in your Cargo.toml metadata:
 
