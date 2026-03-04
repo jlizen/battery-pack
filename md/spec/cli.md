@@ -150,6 +150,11 @@ r[cli.new.template-flag]
 `cargo bp new <pack> --template <name>` MUST use the specified template
 without prompting.
 
+r[cli.new.define-flag]
+`cargo bp new <pack> --define <key>=<value>` (or `-d`) MUST set the
+named placeholder to the given value, skipping the prompt for that
+placeholder. Multiple `-d` flags MAY be provided.
+
 ## `cargo bp status`
 
 r[cli.status.list]
