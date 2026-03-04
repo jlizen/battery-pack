@@ -189,6 +189,9 @@ prompt = "What does this project do?"
 default = "A new project"
 ```
 
+Placeholders should have `default` values so that `cargo bp validate`
+can generate and check templates non-interactively.
+
 Register templates in your Cargo.toml metadata:
 
 ```toml
@@ -202,3 +205,23 @@ If you have multiple templates, users can choose:
 ```bash
 cargo bp new my-pack --template subcmds
 ```
+
+### Validating templates
+
+`cargo bp validate` automatically generates each template, runs
+`cargo check` and `cargo test` on the result, and reports failures.
+This catches broken templates before they reach users.
+
+To run template validation in your CI tests, add a test in your `src/lib.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn validate_templates() {
+        battery_pack::testing::validate_templates(env!("CARGO_MANIFEST_DIR")).unwrap();
+    }
+}
+```
+
+The built-in scaffolding template includes this test by default.

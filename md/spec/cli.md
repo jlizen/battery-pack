@@ -247,6 +247,25 @@ If the target `Cargo.toml` has no `[package]` section and is not
 a workspace manifest, `cargo bp validate` MUST report a clear
 error indicating the file is not a battery pack crate.
 
+r[cli.validate.templates]
+`cargo bp validate` MUST generate each declared template into a
+temporary directory, then run `cargo check` and `cargo test` on
+the result. If any template fails to compile or its tests fail,
+validation MUST fail.
+
+r[cli.validate.templates.patch]
+When validating templates, `cargo bp validate` MUST patch
+crates-io dependencies with local workspace packages so that
+validation runs against the current source.
+
+r[cli.validate.templates.cache]
+Compiled artifacts from template validation SHOULD be cached in
+`<target_dir>/bp-validate/` so that subsequent runs are faster.
+
+r[cli.validate.templates.none]
+If the battery pack declares no templates, template validation
+MUST be skipped.
+
 ## `cargo bp show`
 
 r[cli.show.details]

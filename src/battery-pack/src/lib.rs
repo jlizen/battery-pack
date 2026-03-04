@@ -71,3 +71,28 @@ pub fn validate(self_manifest: &str) {
     // For now, just ensure we rerun when the user's manifest changes.
     println!("cargo:rerun-if-changed={user_toml_path}");
 }
+
+/// Test utilities for battery pack authors.
+///
+/// In your `src/lib.rs`:
+///
+/// ```rust,ignore
+/// #[cfg(test)]
+/// mod tests {
+///     #[test]
+///     fn validate_templates() {
+///         battery_pack::testing::validate_templates(env!("CARGO_MANIFEST_DIR")).unwrap();
+///     }
+/// }
+/// ```
+pub mod testing {
+    pub use bphelper_cli::validate_templates;
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn validate_templates() {
+        battery_pack::testing::validate_templates(env!("CARGO_MANIFEST_DIR")).unwrap();
+    }
+}
