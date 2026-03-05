@@ -1,5 +1,3 @@
-ignore = ["hooks"]
-
 [placeholders.description]
 type = "string"
 prompt = "What does this battery pack provide?"
