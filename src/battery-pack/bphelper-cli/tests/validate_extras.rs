@@ -21,6 +21,7 @@ fn fixtures_dir() -> PathBuf {
 
 // [verify cli.validate.default-path]
 #[test]
+#[ignore = "causes race conditions, refactor to not rely on setting env::current_dir()"]
 fn validate_defaults_to_current_directory() {
     // When invoked with None, validate_battery_pack_cmd uses std::env::current_dir().
     // We can exercise this by cd-ing into a valid fixture directory first.

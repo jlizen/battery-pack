@@ -122,6 +122,11 @@ r[format.templates.selection]
 If a battery pack has multiple templates, `cargo bp new` MUST prompt
 the user to select one (unless `--template` is specified).
 
+r[format.templates.placeholder-defaults]
+Template placeholders SHOULD define a `default` value in
+`cargo-generate.toml` so that templates can be validated
+non-interactively by `cargo bp validate`.
+
 ## Examples
 
 r[format.examples.standard]

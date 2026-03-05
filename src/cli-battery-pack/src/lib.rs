@@ -11,3 +11,11 @@
 pub fn validate() {
     battery_pack::validate(include_str!("../Cargo.toml"));
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn validate_templates() {
+        battery_pack::testing::validate_templates(env!("CARGO_MANIFEST_DIR")).unwrap();
+    }
+}

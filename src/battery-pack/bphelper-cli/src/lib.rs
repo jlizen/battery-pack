@@ -2808,6 +2808,7 @@ pub fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
 
     // [impl cli.validate.clean]
     if report.is_clean() {
+        validate_templates(crate_root.to_str().unwrap_or("."))?;
         println!("{} is valid", spec.name);
         return Ok(());
     }
@@ -2840,6 +2841,130 @@ pub fn validate_battery_pack_cmd(path: Option<&str>) -> Result<()> {
 
     // [impl cli.validate.warnings-only]
     // Warnings only — still succeeds
+    validate_templates(crate_root.to_str().unwrap_or("."))?;
     println!("{} is valid ({} warning(s))", spec.name, warnings);
+    Ok(())
+}
+
+/// Validate that each template in a battery pack generates a project that compiles
+/// and passes tests.
+///
+/// For each template declared in the battery pack's metadata:
+/// 1. Generates a project into a temporary directory
+/// 2. Runs `cargo check` to verify it compiles
+/// 3. Runs `cargo test` to verify tests pass
+///
+/// Compiled artifacts are cached in `<target_dir>/bp-validate/` so that
+/// subsequent runs are faster.
+// [impl cli.validate.templates]
+// [impl cli.validate.templates.cache]
+pub fn validate_templates(manifest_dir: &str) -> Result<()> {
+    let manifest_dir = Path::new(manifest_dir);
+    let cargo_toml = manifest_dir.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml)
+        .with_context(|| format!("failed to read {}", cargo_toml.display()))?;
+
+    let crate_name = manifest_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+    let spec = bphelper_manifest::parse_battery_pack(&content)
+        .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", cargo_toml.display()))?;
+
+    if spec.templates.is_empty() {
+        // [impl cli.validate.templates.none]
+        println!("no templates to validate");
+        return Ok(());
+    }
+
+    // Stable target dir for caching compiled artifacts across runs.
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .manifest_path(&cargo_toml)
+        .no_deps()
+        .exec()
+        .context("failed to run cargo metadata")?;
+    let shared_target_dir = metadata.target_directory.join("bp-validate");
+
+    for (name, template) in &spec.templates {
+        println!("validating template '{name}'...");
+
+        let tmp = tempfile::tempdir().context("failed to create temp directory")?;
+
+        let project_name = format!("bp-validate-{name}");
+
+        let args = GenerateArgs {
+            template_path: TemplatePath {
+                path: Some(manifest_dir.to_string_lossy().into_owned()),
+                auto_path: Some(template.path.clone()),
+                ..Default::default()
+            },
+            name: Some(project_name),
+            destination: Some(tmp.path().to_path_buf()),
+            vcs: Some(Vcs::None),
+            silent: true,
+            ..Default::default()
+        };
+
+        let project_dir = cargo_generate::generate(args)
+            .with_context(|| format!("failed to generate template '{name}'"))?;
+
+        // Patch crates-io deps to use local workspace packages so we validate
+        // against the current source, not the published versions.
+        // This is mostly relevant for in-tree development, but harmless
+        // externally.
+        write_crates_io_patches(&project_dir, &metadata)?;
+
+        // cargo check
+        let output = std::process::Command::new("cargo")
+            .args(["check"])
+            .env("CARGO_TARGET_DIR", &*shared_target_dir)
+            .current_dir(&project_dir)
+            .output()
+            .context("failed to run cargo check")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "cargo check failed for template '{name}':\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // cargo test
+        let output = std::process::Command::new("cargo")
+            .args(["test"])
+            .env("CARGO_TARGET_DIR", &*shared_target_dir)
+            .current_dir(&project_dir)
+            .output()
+            .context("failed to run cargo test")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "cargo test failed for template '{name}':\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        println!("template '{name}' ok");
+    }
+
+    println!(
+        "all {} template(s) for '{}' validated successfully",
+        spec.templates.len(),
+        crate_name
+    );
+    Ok(())
+}
+
+/// Write a `.cargo/config.toml` that patches crates-io dependencies with local
+/// workspace packages, so template validation builds against current source.
+// [impl cli.validate.templates.patch]
+fn write_crates_io_patches(project_dir: &Path, metadata: &cargo_metadata::Metadata) -> Result<()> {
+    let mut patches = String::from("[patch.crates-io]\n");
+    for pkg in &metadata.workspace_packages() {
+        let path = pkg.manifest_path.parent().unwrap();
+        patches.push_str(&format!("{} = {{ path = \"{}\" }}\n", pkg.name, path));
+    }
+
+    let cargo_dir = project_dir.join(".cargo");
+    std::fs::create_dir_all(&cargo_dir)
+        .with_context(|| format!("failed to create {}", cargo_dir.display()))?;
+    std::fs::write(cargo_dir.join("config.toml"), patches)
+        .context("failed to write .cargo/config.toml")?;
     Ok(())
 }
