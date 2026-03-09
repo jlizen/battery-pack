@@ -294,6 +294,8 @@ impl FormScreen {
 struct PreviewScreen {
     /// Syntax-highlighted content to display.
     content: Text<'static>,
+    /// Template name for the header.
+    template_name: String,
     /// Vertical scroll offset.
     scroll: u16,
     /// Total number of lines in content (for scroll bounds).
@@ -1345,6 +1347,14 @@ impl App {
                 }
             }
             Action::PreviewTemplate(detail, template_path, selected_index, came_from_list) => {
+                // Find the template name from the path
+                let template_name = detail
+                    .templates
+                    .iter()
+                    .find(|t| t.path == template_path)
+                    .map(|t| t.name.clone())
+                    .unwrap_or_else(|| template_path.clone());
+
                 // Find the crate root to render the template from.
                 // For registry packs the detail was built from a downloaded
                 // crate, but we don't keep that temp dir around. Use
@@ -1384,6 +1394,7 @@ impl App {
                 let line_count = content.lines.len() as u16;
                 self.screen = Screen::Preview(PreviewScreen {
                     content,
+                    template_name,
                     scroll: 0,
                     line_count,
                     detail,
@@ -2036,9 +2047,15 @@ fn render_preview(frame: &mut Frame, state: &PreviewScreen) {
     .areas(area);
 
     frame.render_widget(
-        Paragraph::new("Template Preview")
-            .style(Style::default().fg(Color::Green).bold())
-            .centered(),
+        Paragraph::new(Line::from(vec![
+            Span::styled(&state.detail.name, Style::default().fg(Color::Green).bold()),
+            Span::raw(" / "),
+            Span::styled(
+                &state.template_name,
+                Style::default().fg(Color::Cyan).bold(),
+            ),
+        ]))
+        .centered(),
         header,
     );
 
@@ -3971,6 +3988,7 @@ mod tests {
         let detail = make_detail(&["serde"], &["default"], &[]);
         let mut app = make_app(Screen::Preview(PreviewScreen {
             content: Text::from("test content"),
+            template_name: "default".to_string(),
             scroll: 0,
             line_count: 1,
             detail: Rc::new(detail),
@@ -3991,6 +4009,7 @@ mod tests {
         let detail = make_detail(&[], &["default"], &[]);
         let mut app = make_app(Screen::Preview(PreviewScreen {
             content: Text::from("line1\nline2\nline3\nline4\nline5"),
+            template_name: "default".to_string(),
             scroll: 0,
             line_count: 5,
             detail: Rc::new(detail),
@@ -4024,6 +4043,7 @@ mod tests {
         let detail = make_detail(&[], &["default"], &[]);
         let mut app = make_app(Screen::Preview(PreviewScreen {
             content: Text::from("line1\nline2"),
+            template_name: "default".to_string(),
             scroll: 0,
             line_count: 2,
             detail: Rc::new(detail),
