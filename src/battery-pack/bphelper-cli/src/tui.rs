@@ -1,6 +1,6 @@
 //! Interactive TUI for battery-pack CLI.
 
-use crate::{
+use crate::registry::{
     BatteryPackDetail, BatteryPackSummary, CrateSource, InstalledPack, fetch_battery_pack_detail,
     fetch_battery_pack_list, load_installed_packs,
 };
@@ -801,7 +801,7 @@ impl App {
                 let result = if path.is_some() {
                     fetch_battery_pack_detail(&name, path.as_deref())
                 } else {
-                    crate::fetch_battery_pack_detail_from_source(&self.source, &name)
+                    crate::registry::fetch_battery_pack_detail_from_source(&self.source, &name)
                 };
                 match result {
                     Ok(detail) => {
@@ -880,7 +880,7 @@ impl App {
                 mut add_screen,
                 bp_name,
                 bp_short_name,
-            } => match crate::fetch_bp_spec(&self.source, &bp_name) {
+            } => match crate::registry::fetch_bp_spec(&self.source, &bp_name) {
                 Ok((_version, spec)) => {
                     let summary = BatteryPackSummary {
                         name: bp_name,
@@ -2316,7 +2316,7 @@ mod tests {
             extends: Vec::new(),
             templates: templates
                 .iter()
-                .map(|name| crate::TemplateInfo {
+                .map(|name| crate::registry::TemplateInfo {
                     name: name.to_string(),
                     path: format!("templates/{}", name),
                     description: None,
@@ -2325,7 +2325,7 @@ mod tests {
                 .collect(),
             examples: examples
                 .iter()
-                .map(|name| crate::ExampleInfo {
+                .map(|name| crate::registry::ExampleInfo {
                     name: name.to_string(),
                     description: None,
                     repo_path: None,
@@ -2964,7 +2964,7 @@ mod tests {
             &[("default", &["serde", "tokio"])],
         );
 
-        let installed_pack = crate::InstalledPack {
+        let installed_pack = crate::registry::InstalledPack {
             name: "test-battery-pack".to_string(),
             short_name: "test".to_string(),
             version: "1.0.0".to_string(),
@@ -3116,7 +3116,7 @@ mod tests {
             ],
         );
 
-        let installed_pack = crate::InstalledPack {
+        let installed_pack = crate::registry::InstalledPack {
             name: "test-battery-pack".to_string(),
             short_name: "test".to_string(),
             version: "1.0.0".to_string(),
