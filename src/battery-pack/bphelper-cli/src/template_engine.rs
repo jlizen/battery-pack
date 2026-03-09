@@ -609,4 +609,43 @@ mod tests {
         sorted.sort();
         assert_eq!(paths, sorted, "files should be sorted by path");
     }
+
+    #[test]
+    fn preview_resolves_bp_managed_deps() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/managed-battery-pack");
+
+        let opts = super::PreviewOpts {
+            crate_root: fixtures,
+            template_path: "templates/default".to_string(),
+            project_name: "my-project".to_string(),
+            defines: BTreeMap::new(),
+        };
+
+        let files = super::preview(opts).unwrap();
+        let cargo = files.iter().find(|f| f.path == "Cargo.toml").unwrap();
+
+        // bp-managed markers should be resolved to concrete versions.
+        assert!(
+            !cargo.content.contains("bp-managed"),
+            "bp-managed should be resolved:\n{}",
+            cargo.content
+        );
+        assert!(
+            cargo.content.contains("anyhow"),
+            "should contain anyhow dep"
+        );
+        assert!(cargo.content.contains("clap"), "should contain clap dep");
+        // Battery pack itself should get its version.
+        assert!(
+            cargo.content.contains("managed-battery-pack"),
+            "should contain battery pack build-dep"
+        );
+    }
 }
