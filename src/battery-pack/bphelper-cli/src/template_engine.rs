@@ -68,6 +68,101 @@ pub(crate) struct GenerateOpts {
     pub(crate) git_init: bool,
 }
 
+/// Options for template preview (render without writing to disk).
+pub(crate) struct PreviewOpts {
+    /// The battery pack crate root (contains `templates/` dir).
+    pub(crate) crate_root: PathBuf,
+    /// Relative path to the template dir within the crate (e.g. `templates/default`).
+    pub(crate) template_path: String,
+    /// Project name (kebab-case).
+    pub(crate) project_name: String,
+    /// Pre-set placeholder values (skip prompting for these).
+    pub(crate) defines: BTreeMap<String, String>,
+}
+
+/// A rendered file from a template preview.
+pub(crate) struct RenderedFile {
+    /// Relative path within the generated project.
+    pub(crate) path: String,
+    /// Rendered file content.
+    pub(crate) content: String,
+}
+
+/// Render a template and return the files in memory without writing to disk.
+pub(crate) fn preview(opts: PreviewOpts) -> Result<Vec<RenderedFile>> {
+    let template_dir = opts.crate_root.join(&opts.template_path);
+    if !template_dir.is_dir() {
+        bail!("template directory not found: {}", template_dir.display());
+    }
+
+    let config = load_config(&template_dir)?;
+
+    let mut variables = BTreeMap::new();
+    variables.insert("project_name".to_string(), opts.project_name.clone());
+    variables.insert(
+        "crate_name".to_string(),
+        opts.project_name.replace('-', "_"),
+    );
+    resolve_placeholders(&config.placeholders, &opts.defines, &mut variables)?;
+
+    let env = build_jinja_env(&opts.crate_root, &variables)?;
+    let ignore_set: Vec<&str> = config.ignore.iter().map(|s| s.as_str()).collect();
+
+    let mut files = Vec::new();
+
+    // Walk template directory and render files in memory
+    for entry in walkdir::WalkDir::new(&template_dir) {
+        let entry = entry?;
+        let rel_path = entry.path().strip_prefix(&template_dir)?;
+
+        if should_ignore(rel_path, &ignore_set) {
+            continue;
+        }
+        if rel_path == Path::new("bp-template.toml") {
+            continue;
+        }
+        if entry.file_type().is_dir() {
+            continue;
+        }
+
+        let rendered_path = env.render_str(&rel_path.to_string_lossy(), minijinja::context! {})?;
+        let content = std::fs::read_to_string(entry.path())
+            .with_context(|| format!("failed to read {}", entry.path().display()))?;
+        let rendered = env
+            .render_str(&content, minijinja::context! {})
+            .with_context(|| format!("failed to render template {}", rel_path.display()))?;
+
+        files.push(RenderedFile {
+            path: rendered_path,
+            content: rendered,
+        });
+    }
+
+    // Process [[files]] includes
+    for file_include in &config.files {
+        let src_path = opts.crate_root.join(&file_include.src);
+        if !src_path.exists() {
+            bail!("file include source not found: {}", src_path.display());
+        }
+        // Skip if a template file already produced this path
+        if files.iter().any(|f| f.path == file_include.dest) {
+            continue;
+        }
+        let content = std::fs::read_to_string(&src_path)
+            .with_context(|| format!("failed to read {}", src_path.display()))?;
+        let rendered = env
+            .render_str(&content, minijinja::context! {})
+            .with_context(|| format!("failed to render {}", src_path.display()))?;
+        files.push(RenderedFile {
+            path: file_include.dest.clone(),
+            content: rendered,
+        });
+    }
+
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
 /// Generate a project from a battery pack template.
 ///
 /// Returns the path to the generated project directory.
@@ -539,5 +634,48 @@ mod tests {
         "#;
         let err = toml::from_str::<BpTemplateConfig>(toml).unwrap_err();
         assert!(err.to_string().contains("unknown variant"), "{err}");
+    }
+
+    // -- preview --
+
+    #[test]
+    fn preview_renders_template_in_memory() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/fancy-battery-pack");
+
+        let opts = super::PreviewOpts {
+            crate_root: fixtures,
+            template_path: "templates/default".to_string(),
+            project_name: "my-project".to_string(),
+            defines: BTreeMap::new(),
+        };
+
+        let files = super::preview(opts).unwrap();
+        assert!(!files.is_empty(), "preview should produce files");
+
+        // Should contain Cargo.toml with rendered project name
+        let cargo = files.iter().find(|f| f.path == "Cargo.toml").unwrap();
+        assert!(
+            cargo.content.contains("my-project"),
+            "Cargo.toml should contain rendered project name"
+        );
+
+        // Should contain src/main.rs
+        assert!(
+            files.iter().any(|f| f.path == "src/main.rs"),
+            "should contain src/main.rs"
+        );
+
+        // Files should be sorted by path
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(paths, sorted, "files should be sorted by path");
     }
 }
