@@ -3,5 +3,6 @@ members = [
     "basic-battery-pack",
     "fancy-battery-pack",
     "broken-battery-pack",
+    "managed-battery-pack",
 ]
 resolver = "2"

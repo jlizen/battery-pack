@@ -1614,12 +1614,13 @@ mod tests {
 
         let packs = discover_battery_packs(&fixtures_dir).unwrap();
 
-        assert_eq!(packs.len(), 3);
+        assert_eq!(packs.len(), 4);
 
         let names: Vec<&str> = packs.iter().map(|p| p.name.as_str()).collect();
         assert!(names.contains(&"basic-battery-pack"));
         assert!(names.contains(&"fancy-battery-pack"));
         assert!(names.contains(&"broken-battery-pack"));
+        assert!(names.contains(&"managed-battery-pack"));
 
         // Verify basic-battery-pack
         let basic = packs
@@ -1655,6 +1656,21 @@ mod tests {
         assert!(!visible.contains_key("serde_json"));
         assert!(!visible.contains_key("cc"));
         assert!(visible.contains_key("clap"));
+
+        // Verify managed-battery-pack
+        let managed = packs
+            .iter()
+            .find(|p| p.name == "managed-battery-pack")
+            .unwrap();
+        assert_eq!(managed.version, "0.2.0");
+        assert_eq!(managed.crates.len(), 2); // anyhow, clap
+        assert!(managed.crates["anyhow"].optional);
+        assert!(managed.crates["clap"].optional);
+        assert_eq!(managed.templates.len(), 1);
+        let default = managed.resolve_crates(&[]);
+        assert_eq!(default.len(), 2);
+        assert!(default.contains_key("anyhow"));
+        assert!(default.contains_key("clap"));
     }
 
     // -- validate_spec tests --
@@ -2087,6 +2103,30 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|d| d.rule == "format.crate.lib" && d.severity == Severity::Warning)
+        );
+    }
+
+    #[test]
+    fn validate_fixture_managed_battery_pack() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = manifest_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        let fixture = workspace_root.join("tests/fixtures/managed-battery-pack");
+
+        let content = std::fs::read_to_string(fixture.join("Cargo.toml")).unwrap();
+        let spec = parse_battery_pack(&content).unwrap();
+
+        let mut report = spec.validate_spec();
+        report.merge(validate_on_disk(&spec, &fixture));
+        assert!(
+            report.is_clean(),
+            "managed-battery-pack should be clean: {:?}",
+            report.diagnostics
         );
     }
 
