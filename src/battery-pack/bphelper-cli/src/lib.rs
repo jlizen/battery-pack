@@ -8,4 +8,4 @@ mod tui;
 
 // The only true public API
 pub use commands::main;
-pub use commands::validate_templates;
+pub use commands::validate::validate_templates;
