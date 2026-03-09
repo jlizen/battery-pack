@@ -1980,9 +1980,8 @@ fn render_form(frame: &mut Frame, state: &FormScreen) {
 fn highlight_preview(files: &[crate::template_engine::RenderedFile]) -> Text<'static> {
     use syntect::easy::HighlightLines;
     use syntect::highlighting::ThemeSet;
-    use syntect::parsing::SyntaxSet;
 
-    let ss = SyntaxSet::load_defaults_newlines();
+    let ss = two_face::syntax::extra_newlines();
     let ts = ThemeSet::load_defaults();
     let theme = &ts.themes["base16-eighties.dark"];
 
