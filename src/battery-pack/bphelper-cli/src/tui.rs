@@ -2060,7 +2060,11 @@ fn render_preview(frame: &mut Frame, state: &PreviewScreen) {
     );
 
     let preview = Paragraph::new(state.content.clone())
-        .block(Block::default().borders(Borders::ALL))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .padding(ratatui::widgets::Padding::horizontal(1)),
+        )
         .scroll((state.scroll, 0));
     frame.render_widget(preview, main);
 
