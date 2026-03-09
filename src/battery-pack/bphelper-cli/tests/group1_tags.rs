@@ -301,23 +301,29 @@ fn add_dep_twice_with_features_no_duplicate() {
 #[test]
 fn metadata_registration_idempotent() {
     // Simulating the metadata upsert: writing to
-    // [package.metadata.battery-pack.<name>] twice should produce one entry.
+    // [package.metadata.battery-pack] twice should produce one entry.
     let toml_str = r#"[package]
 name = "my-app"
 version = "0.1.0"
 
-[package.metadata.battery-pack.cli-battery-pack]
-features = ["default"]
+[package.metadata.battery-pack]
+cli-battery-pack = { features = ["default"] }
 "#;
     let mut doc: toml_edit::DocumentMut = toml_str.parse().unwrap();
 
-    // "Re-add" with updated features
-    let bp_meta = &mut doc["package"]["metadata"]["battery-pack"]["cli-battery-pack"];
+    // "Re-add" with updated features (inline table style)
     let mut features_array = toml_edit::Array::new();
     features_array.push("default");
     features_array.push("indicators");
-    *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
-    bp_meta["features"] = toml_edit::value(features_array);
+    let mut inline = toml_edit::InlineTable::new();
+    inline.insert("features", toml_edit::Value::Array(features_array));
+    let bp_table = doc["package"]["metadata"]["battery-pack"]
+        .as_table_mut()
+        .unwrap();
+    bp_table.insert(
+        "cli-battery-pack",
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(inline)),
+    );
 
     // Verify: should be exactly one battery-pack entry, not two
     let bp_table = doc["package"]["metadata"]["battery-pack"]

@@ -601,11 +601,26 @@ fn integration_add_fancy_fixture_with_indicators_feature() {
 // [verify manifest.features.storage]
 #[test]
 fn register_format_roundtrip_with_features() {
-    // Verify that a Cargo.toml with explicit features can be read back correctly.
-    // We use a hand-written TOML (matching what add_battery_pack produces on
-    // an existing manifest) rather than constructing via toml_edit, since the
-    // round-trip through toml_edit's implicit-table creation can differ from
-    // writing into an already-structured document.
+    // Verify that a Cargo.toml with inline-table features can be read back correctly.
+    let manifest = r#"[package]
+name = "my-app"
+version = "0.1.0"
+
+[package.metadata.battery-pack]
+basic-battery-pack = { features = ["default", "all-errors"] }
+"#;
+
+    let features = bphelper_cli::read_active_features(manifest, "basic-battery-pack");
+    assert_eq!(
+        features,
+        BTreeSet::from(["default".to_string(), "all-errors".to_string()])
+    );
+}
+
+// [verify manifest.features.storage]
+#[test]
+fn register_format_roundtrip_with_dotted_subtable() {
+    // The old dotted sub-table format must still be readable.
     let manifest = r#"[package]
 name = "my-app"
 version = "0.1.0"

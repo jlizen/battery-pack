@@ -1589,9 +1589,16 @@ fn write_bp_features_to_doc(
     doc[path_prefix[0]][path_prefix[1]]["battery-pack"]
         .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
 
-    let bp_meta = &mut doc[path_prefix[0]][path_prefix[1]]["battery-pack"][bp_name];
-    *bp_meta = toml_edit::Item::Table(toml_edit::Table::new());
-    bp_meta["features"] = toml_edit::value(features_array);
+    // Write as inline table: `bp_name = { features = [...] }`
+    let mut inline = toml_edit::InlineTable::new();
+    inline.insert("features", toml_edit::Value::Array(features_array));
+    let bp_table = doc[path_prefix[0]][path_prefix[1]]["battery-pack"]
+        .as_table_mut()
+        .expect("battery-pack table must exist");
+    bp_table.insert(
+        bp_name,
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(inline)),
+    );
 }
 
 /// Resolve the manifest path for a battery pack using `cargo metadata`.
