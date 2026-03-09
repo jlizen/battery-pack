@@ -189,6 +189,12 @@ fn render(
     }
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // Resolve bp-managed dependencies in the rendered Cargo.toml.
+    if let Some(cargo) = files.iter_mut().find(|f| f.path == "Cargo.toml") {
+        cargo.content = crate::resolve_bp_managed_content(&cargo.content, crate_root)?;
+    }
+
     Ok(files)
 }
 
