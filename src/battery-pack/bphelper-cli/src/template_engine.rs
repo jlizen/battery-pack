@@ -103,7 +103,15 @@ pub(crate) fn preview(opts: PreviewOpts) -> Result<Vec<RenderedFile>> {
         "crate_name".to_string(),
         opts.project_name.replace('-', "_"),
     );
-    resolve_placeholders(&config.placeholders, &opts.defines, &mut variables)?;
+    // For preview, fall back to "<name>" for placeholders without a default
+    // so the preview always renders.
+    let mut defines = opts.defines;
+    for (name, def) in &config.placeholders {
+        defines
+            .entry(name.clone())
+            .or_insert_with(|| def.default.clone().unwrap_or_else(|| format!("<{name}>")));
+    }
+    resolve_placeholders(&config.placeholders, &defines, &mut variables)?;
 
     let env = build_jinja_env(&opts.crate_root, &variables)?;
     let ignore_set: Vec<&str> = config.ignore.iter().map(|s| s.as_str()).collect();
