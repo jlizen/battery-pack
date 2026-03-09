@@ -292,8 +292,8 @@ impl FormScreen {
 }
 
 struct PreviewScreen {
-    /// Rendered content to display.
-    content: String,
+    /// Syntax-highlighted content to display.
+    content: Text<'static>,
     /// Vertical scroll offset.
     scroll: u16,
     /// Total number of lines in content (for scroll bounds).
@@ -1372,22 +1372,16 @@ impl App {
                             defines: BTreeMap::new(),
                         };
                         match crate::template_engine::preview(opts) {
-                            Ok(files) => {
-                                let mut buf = String::new();
-                                for file in &files {
-                                    buf.push_str(&format!("── {} ──\n", file.path));
-                                    buf.push_str(&file.content);
-                                    buf.push('\n');
-                                }
-                                buf
-                            }
-                            Err(e) => format!("Failed to render preview: {e}"),
+                            Ok(files) => highlight_preview(&files),
+                            Err(e) => Text::from(format!("Failed to render preview: {e}")),
                         }
                     }
-                    None => "Template preview unavailable — battery pack not found locally.\nUse --crate-source or install the pack first.".to_string(),
+                    None => Text::from(
+                        "Template preview unavailable — battery pack not found locally.\nUse --crate-source or install the pack first.",
+                    ),
                 };
 
-                let line_count = content.lines().count() as u16;
+                let line_count = content.lines.len() as u16;
                 self.screen = Screen::Preview(PreviewScreen {
                     content,
                     scroll: 0,
@@ -1706,8 +1700,7 @@ fn render_list(frame: &mut Frame, state: &mut ListScreen) {
     // Footer
     frame.render_widget(
         Paragraph::new("↑↓/jk Navigate | Enter Select | q Quit")
-            .style(Style::default().fg(Color::DarkGray))
-            .centered(),
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray)),
         footer,
     );
 }
@@ -1880,9 +1873,7 @@ fn render_detail(frame: &mut Frame, state: &DetailScreen) {
         format!("↑↓/jk Navigate | Enter Open/Select | {}", back_hint)
     };
     frame.render_widget(
-        Paragraph::new(footer_text)
-            .style(Style::default().fg(Color::DarkGray))
-            .centered(),
+        Paragraph::new(footer_text).style(Style::default().fg(Color::White).bg(Color::DarkGray)),
         footer,
     );
 }
@@ -1968,8 +1959,7 @@ fn render_form(frame: &mut Frame, state: &FormScreen) {
     // Hint
     frame.render_widget(
         Paragraph::new("Tab Switch | Enter Create | Esc Cancel")
-            .style(Style::default().fg(Color::DarkGray))
-            .centered(),
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray)),
         hint,
     );
 
@@ -1984,6 +1974,57 @@ fn render_form(frame: &mut Frame, state: &FormScreen) {
         cursor_area.x + 1 + cursor_x as u16,
         cursor_area.y + 1,
     ));
+}
+
+/// Convert rendered template files into syntax-highlighted [`Text`].
+fn highlight_preview(files: &[crate::template_engine::RenderedFile]) -> Text<'static> {
+    use syntect::easy::HighlightLines;
+    use syntect::highlighting::ThemeSet;
+    use syntect::parsing::SyntaxSet;
+
+    let ss = SyntaxSet::load_defaults_newlines();
+    let ts = ThemeSet::load_defaults();
+    let theme = &ts.themes["base16-eighties.dark"];
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    for (i, file) in files.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::from(""));
+        }
+        // File header
+        lines.push(Line::from(Span::styled(
+            format!("── {} ──", file.path),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+
+        // Pick syntax by file extension
+        let syntax = std::path::Path::new(&file.path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(|ext| ss.find_syntax_by_extension(ext))
+            .unwrap_or_else(|| ss.find_syntax_plain_text());
+
+        let mut h = HighlightLines::new(syntax, theme);
+        for line in file.content.lines() {
+            let spans: Vec<Span<'static>> = match h.highlight_line(line, &ss) {
+                Ok(ranges) => ranges
+                    .into_iter()
+                    .map(|(style, text)| {
+                        let fg =
+                            Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+                        Span::styled(text.to_string(), Style::default().fg(fg))
+                    })
+                    .collect(),
+                Err(_) => vec![Span::raw(line.to_string())],
+            };
+            lines.push(Line::from(spans));
+        }
+    }
+
+    Text::from(lines)
 }
 
 fn render_preview(frame: &mut Frame, state: &PreviewScreen) {
@@ -2002,16 +2043,14 @@ fn render_preview(frame: &mut Frame, state: &PreviewScreen) {
         header,
     );
 
-    let preview = Paragraph::new(state.content.as_str())
+    let preview = Paragraph::new(state.content.clone())
         .block(Block::default().borders(Borders::ALL))
-        .scroll((state.scroll, 0))
-        .wrap(Wrap { trim: false });
+        .scroll((state.scroll, 0));
     frame.render_widget(preview, main);
 
     frame.render_widget(
         Paragraph::new("↑↓/jk Scroll | Esc Back")
-            .style(Style::default().fg(Color::DarkGray))
-            .centered(),
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray)),
         footer,
     );
 }
@@ -2124,9 +2163,7 @@ fn render_add(frame: &mut Frame, state: &mut AddScreen) {
         }
     };
     frame.render_widget(
-        Paragraph::new(footer_text)
-            .style(Style::default().fg(Color::DarkGray))
-            .centered(),
+        Paragraph::new(footer_text).style(Style::default().fg(Color::White).bg(Color::DarkGray)),
         footer,
     );
 }
@@ -3934,7 +3971,7 @@ mod tests {
     fn preview_esc_returns_to_detail() {
         let detail = make_detail(&["serde"], &["default"], &[]);
         let mut app = make_app(Screen::Preview(PreviewScreen {
-            content: "test content".to_string(),
+            content: Text::from("test content"),
             scroll: 0,
             line_count: 1,
             detail: Rc::new(detail),
@@ -3954,7 +3991,7 @@ mod tests {
     fn preview_scroll_down_and_up() {
         let detail = make_detail(&[], &["default"], &[]);
         let mut app = make_app(Screen::Preview(PreviewScreen {
-            content: "line1\nline2\nline3\nline4\nline5".to_string(),
+            content: Text::from("line1\nline2\nline3\nline4\nline5"),
             scroll: 0,
             line_count: 5,
             detail: Rc::new(detail),
@@ -3987,7 +4024,7 @@ mod tests {
     fn preview_scroll_clamps_at_bounds() {
         let detail = make_detail(&[], &["default"], &[]);
         let mut app = make_app(Screen::Preview(PreviewScreen {
-            content: "line1\nline2".to_string(),
+            content: Text::from("line1\nline2"),
             scroll: 0,
             line_count: 2,
             detail: Rc::new(detail),
