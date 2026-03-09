@@ -97,6 +97,7 @@ enum Screen {
     Detail(DetailScreen),
     NewProjectForm(FormScreen),
     Add(AddScreen),
+    Preview(PreviewScreen),
 }
 
 struct ErrorScreen {
@@ -288,6 +289,20 @@ impl FormScreen {
             FormField::ProjectName => self.project_name.len(),
         }
     }
+}
+
+struct PreviewScreen {
+    /// Rendered content to display.
+    content: String,
+    /// Vertical scroll offset.
+    scroll: u16,
+    /// Total number of lines in content (for scroll bounds).
+    line_count: u16,
+    /// The detail screen to return to on Esc.
+    detail: Rc<BatteryPackDetail>,
+    /// Selected index to restore when returning to detail.
+    selected_index: usize,
+    came_from_list: bool,
 }
 
 // ============================================================================
@@ -988,6 +1003,9 @@ impl App {
             FormRight,
             FormHome,
             FormEnd,
+            PreviewTemplate(Rc<BatteryPackDetail>, String, usize, bool),
+            PreviewScroll(i16),
+            PreviewBack(Rc<BatteryPackDetail>, usize, bool),
         }
 
         let action = match &self.screen {
@@ -1082,6 +1100,19 @@ impl App {
                         Action::None
                     }
                 }
+                KeyCode::Char('p') => {
+                    // 'p' previews the currently selected template
+                    if let Some(DetailItem::Template { _path, .. }) = state.selected_item() {
+                        Action::PreviewTemplate(
+                            Rc::clone(&state.detail),
+                            _path,
+                            state.selected_index,
+                            state.came_from_list,
+                        )
+                    } else {
+                        Action::None
+                    }
+                }
                 KeyCode::Esc => Action::DetailBack(state.came_from_list),
                 KeyCode::Char('q') => Action::Quit,
                 _ => Action::None,
@@ -1123,6 +1154,16 @@ impl App {
                 self.handle_add_key(key);
                 return;
             }
+            Screen::Preview(state) => match key {
+                KeyCode::Esc | KeyCode::Char('q') => Action::PreviewBack(
+                    Rc::clone(&state.detail),
+                    state.selected_index,
+                    state.came_from_list,
+                ),
+                KeyCode::Down | KeyCode::Char('j') => Action::PreviewScroll(1),
+                KeyCode::Up | KeyCode::Char('k') => Action::PreviewScroll(-1),
+                _ => Action::None,
+            },
         };
 
         // Now apply the action with full mutable access
@@ -1302,6 +1343,73 @@ impl App {
                 if let Screen::NewProjectForm(state) = &mut self.screen {
                     state.cursor_position = state.focused_field_len();
                 }
+            }
+            Action::PreviewTemplate(detail, template_path, selected_index, came_from_list) => {
+                // Find the crate root to render the template from.
+                // For registry packs the detail was built from a downloaded
+                // crate, but we don't keep that temp dir around. Use
+                // --crate-source / --path if available, otherwise try cargo
+                // metadata.
+                let crate_root = match &self.source {
+                    CrateSource::Local(ws) => {
+                        crate::find_local_battery_pack_dir(ws, &detail.name).ok()
+                    }
+                    CrateSource::Registry => {
+                        // Try to locate via cargo metadata (works if already
+                        // installed as a build-dep).
+                        crate::resolve_battery_pack_manifest(&detail.name)
+                            .ok()
+                            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                    }
+                };
+
+                let content = match crate_root {
+                    Some(root) => {
+                        let opts = crate::template_engine::PreviewOpts {
+                            crate_root: root,
+                            template_path,
+                            project_name: "my-project".to_string(),
+                            defines: BTreeMap::new(),
+                        };
+                        match crate::template_engine::preview(opts) {
+                            Ok(files) => {
+                                let mut buf = String::new();
+                                for file in &files {
+                                    buf.push_str(&format!("── {} ──\n", file.path));
+                                    buf.push_str(&file.content);
+                                    buf.push('\n');
+                                }
+                                buf
+                            }
+                            Err(e) => format!("Failed to render preview: {e}"),
+                        }
+                    }
+                    None => "Template preview unavailable — battery pack not found locally.\nUse --crate-source or install the pack first.".to_string(),
+                };
+
+                let line_count = content.lines().count() as u16;
+                self.screen = Screen::Preview(PreviewScreen {
+                    content,
+                    scroll: 0,
+                    line_count,
+                    detail,
+                    selected_index,
+                    came_from_list,
+                });
+            }
+            Action::PreviewScroll(delta) => {
+                if let Screen::Preview(state) = &mut self.screen {
+                    let new_scroll = state.scroll as i16 + delta;
+                    state.scroll =
+                        new_scroll.clamp(0, state.line_count.saturating_sub(1) as i16) as u16;
+                }
+            }
+            Action::PreviewBack(detail, selected_index, came_from_list) => {
+                self.screen = Screen::Detail(DetailScreen {
+                    detail,
+                    selected_index,
+                    came_from_list,
+                });
             }
         }
     }
@@ -1494,6 +1602,7 @@ impl App {
             Screen::Detail(state) => render_detail(frame, state),
             Screen::NewProjectForm(state) => render_form(frame, state),
             Screen::Add(state) => render_add(frame, state),
+            Screen::Preview(state) => render_preview(frame, state),
         }
     }
 }
@@ -1764,7 +1873,7 @@ fn render_detail(frame: &mut Frame, state: &DetailScreen) {
     let template_selected = matches!(state.selected_item(), Some(DetailItem::Template { .. }));
     let footer_text = if template_selected {
         format!(
-            "↑↓/jk Navigate | Enter Open | n New project | {}",
+            "↑↓/jk Navigate | Enter Open | p Preview | n New project | {}",
             back_hint
         )
     } else {
@@ -1875,6 +1984,36 @@ fn render_form(frame: &mut Frame, state: &FormScreen) {
         cursor_area.x + 1 + cursor_x as u16,
         cursor_area.y + 1,
     ));
+}
+
+fn render_preview(frame: &mut Frame, state: &PreviewScreen) {
+    let area = frame.area();
+    let [header, main, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+
+    frame.render_widget(
+        Paragraph::new("Template Preview")
+            .style(Style::default().fg(Color::Green).bold())
+            .centered(),
+        header,
+    );
+
+    let preview = Paragraph::new(state.content.as_str())
+        .block(Block::default().borders(Borders::ALL))
+        .scroll((state.scroll, 0))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(preview, main);
+
+    frame.render_widget(
+        Paragraph::new("↑↓/jk Scroll | Esc Back")
+            .style(Style::default().fg(Color::DarkGray))
+            .centered(),
+        footer,
+    );
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -3787,5 +3926,79 @@ mod tests {
     #[test]
     fn new_project_creates_via_external_process() {
         // Intentionally empty — see doc comment.
+    }
+
+    // --- Preview screen ---
+
+    #[test]
+    fn preview_esc_returns_to_detail() {
+        let detail = make_detail(&["serde"], &["default"], &[]);
+        let mut app = make_app(Screen::Preview(PreviewScreen {
+            content: "test content".to_string(),
+            scroll: 0,
+            line_count: 1,
+            detail: Rc::new(detail),
+            selected_index: 2,
+            came_from_list: true,
+        }));
+
+        app.handle_key(KeyCode::Esc);
+        assert!(matches!(app.screen, Screen::Detail(_)));
+        if let Screen::Detail(state) = &app.screen {
+            assert_eq!(state.selected_index, 2);
+            assert!(state.came_from_list);
+        }
+    }
+
+    #[test]
+    fn preview_scroll_down_and_up() {
+        let detail = make_detail(&[], &["default"], &[]);
+        let mut app = make_app(Screen::Preview(PreviewScreen {
+            content: "line1\nline2\nline3\nline4\nline5".to_string(),
+            scroll: 0,
+            line_count: 5,
+            detail: Rc::new(detail),
+            selected_index: 0,
+            came_from_list: false,
+        }));
+
+        app.handle_key(KeyCode::Down);
+        if let Screen::Preview(state) = &app.screen {
+            assert_eq!(state.scroll, 1);
+        }
+
+        app.handle_key(KeyCode::Char('j'));
+        if let Screen::Preview(state) = &app.screen {
+            assert_eq!(state.scroll, 2);
+        }
+
+        app.handle_key(KeyCode::Up);
+        if let Screen::Preview(state) = &app.screen {
+            assert_eq!(state.scroll, 1);
+        }
+
+        app.handle_key(KeyCode::Char('k'));
+        if let Screen::Preview(state) = &app.screen {
+            assert_eq!(state.scroll, 0);
+        }
+    }
+
+    #[test]
+    fn preview_scroll_clamps_at_bounds() {
+        let detail = make_detail(&[], &["default"], &[]);
+        let mut app = make_app(Screen::Preview(PreviewScreen {
+            content: "line1\nline2".to_string(),
+            scroll: 0,
+            line_count: 2,
+            detail: Rc::new(detail),
+            selected_index: 0,
+            came_from_list: false,
+        }));
+
+        // Scroll up at 0 stays at 0
+        app.handle_key(KeyCode::Up);
+        if let Screen::Preview(state) = &app.screen {
+            assert_eq!(state.scroll, 0);
+        }
     }
 }
