@@ -1871,6 +1871,7 @@ fn preview_from_path(
     for file in &files {
         println!("── {} ──", file.path);
         println!("{}", file.content);
+        println!();
     }
 
     Ok(())
