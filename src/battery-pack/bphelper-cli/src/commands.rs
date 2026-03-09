@@ -280,7 +280,7 @@ pub fn main() -> Result<()> {
                     status_battery_packs(&project_dir, path.as_deref(), &source)
                 }
                 BpCommands::Validate { path } => {
-                    validate::validate_battery_pack_cmd(path.as_deref())
+                    crate::validate::validate_battery_pack_cmd(path.as_deref())
                 }
             }
         }
@@ -1579,8 +1579,6 @@ fn is_workspace_ref(value: &toml::Value) -> bool {
         _ => false,
     }
 }
-
-pub(crate) mod validate;
 
 #[cfg(test)]
 mod tests;
