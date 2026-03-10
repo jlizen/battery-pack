@@ -84,6 +84,42 @@ pub struct NewArgs {
     pub preview: bool,
 }
 
+#[derive(Debug, clap::Args)]
+pub struct AddArgs {
+    /// Name of the battery pack (e.g., "cli" resolves to "cli-battery-pack").
+    /// Omit to open the interactive manager.
+    pub battery_pack: Option<String>,
+
+    /// Specific crates to add from the battery pack (ignores defaults/features)
+    pub crates: Vec<String>,
+
+    // [impl cli.add.features]
+    // [impl cli.add.features-multiple]
+    /// Named features to enable (comma-separated or repeated)
+    #[arg(long = "features", short = 'F', value_delimiter = ',')]
+    pub features: Vec<String>,
+
+    // [impl cli.add.no-default-features]
+    /// Skip the default crates; only add crates from named features
+    #[arg(long)]
+    pub no_default_features: bool,
+
+    // [impl cli.add.all-features]
+    /// Add every crate the battery pack offers
+    #[arg(long)]
+    pub all_features: bool,
+
+    // [impl cli.add.target]
+    /// Where to store the battery pack registration
+    /// (workspace, package, or default)
+    #[arg(long)]
+    pub target: Option<AddTarget>,
+
+    /// Use a local path instead of downloading from crates.io
+    #[arg(long)]
+    pub path: Option<String>,
+}
+
 #[derive(Subcommand)]
 pub enum BpCommands {
     /// Create a new project from a battery pack template
@@ -94,40 +130,7 @@ pub enum BpCommands {
     /// Without arguments, opens an interactive TUI for managing all battery packs.
     /// With a battery pack name, adds that specific pack (with an interactive picker
     /// for choosing crates if the pack has features or many dependencies).
-    Add {
-        /// Name of the battery pack (e.g., "cli" resolves to "cli-battery-pack").
-        /// Omit to open the interactive manager.
-        battery_pack: Option<String>,
-
-        /// Specific crates to add from the battery pack (ignores defaults/features)
-        crates: Vec<String>,
-
-        // [impl cli.add.features]
-        // [impl cli.add.features-multiple]
-        /// Named features to enable (comma-separated or repeated)
-        #[arg(long = "features", short = 'F', value_delimiter = ',')]
-        features: Vec<String>,
-
-        // [impl cli.add.no-default-features]
-        /// Skip the default crates; only add crates from named features
-        #[arg(long)]
-        no_default_features: bool,
-
-        // [impl cli.add.all-features]
-        /// Add every crate the battery pack offers
-        #[arg(long)]
-        all_features: bool,
-
-        // [impl cli.add.target]
-        /// Where to store the battery pack registration
-        /// (workspace, package, or default)
-        #[arg(long)]
-        target: Option<AddTarget>,
-
-        /// Use a local path instead of downloading from crates.io
-        #[arg(long)]
-        path: Option<String>,
-    },
+    Add(AddArgs),
 
     /// Update dependencies from installed battery packs
     Sync {
@@ -228,26 +231,8 @@ pub fn main() -> Result<()> {
             };
             match command {
                 BpCommands::New(args) => new_from_battery_pack(args, &source),
-                BpCommands::Add {
-                    battery_pack,
-                    crates,
-                    features,
-                    no_default_features,
-                    all_features,
-                    target,
-                    path,
-                } => match battery_pack {
-                    Some(name) => add_battery_pack(
-                        &name,
-                        &features,
-                        no_default_features,
-                        all_features,
-                        &crates,
-                        target,
-                        path.as_deref(),
-                        &source,
-                        &project_dir,
-                    ),
+                BpCommands::Add(args) => match args.battery_pack {
+                    Some(_) => add_battery_pack(args, &source, &project_dir),
                     None if interactive => tui::run_add(source),
                     None => {
                         bail!(
@@ -445,10 +430,33 @@ fn new_from_battery_pack(args: NewArgs, source: &CrateSource) -> Result<()> {
         (dir, tp)
     };
 
+    let render = template_engine::RenderOpts {
+        crate_root: crate_dir,
+        template_path,
+        project_name: if args.preview {
+            args.name.unwrap_or_else(|| "my-project".to_string())
+        } else {
+            ensure_battery_pack_suffix(args.name)?
+        },
+        defines,
+    };
+
     if args.preview {
-        return preview_from_path(&crate_dir, &template_path, args.name, defines);
+        let files = template_engine::preview(render)?;
+        for file in &files {
+            println!("── {} ──", file.path);
+            println!("{}", file.content);
+            println!();
+        }
+        return Ok(());
     }
-    generate_from_path(&crate_dir, &template_path, args.name, defines)
+
+    template_engine::generate(template_engine::GenerateOpts {
+        render,
+        destination: None,
+        git_init: true,
+    })?;
+    Ok(())
 }
 
 /// Resolve crate directory and template path from a registry or local workspace source.
@@ -583,18 +591,12 @@ pub fn resolve_add_crates(
 // [impl manifest.features.storage]
 // [impl manifest.deps.add]
 // [impl manifest.deps.version-features]
-#[allow(clippy::too_many_arguments)]
 pub fn add_battery_pack(
-    name: &str,
-    with_features: &[String],
-    no_default_features: bool,
-    all_features: bool,
-    specific_crates: &[String],
-    target: Option<AddTarget>,
-    path: Option<&str>,
+    args: AddArgs,
     source: &CrateSource,
     project_dir: &Path,
 ) -> Result<()> {
+    let name = args.battery_pack.as_deref().context("battery pack name required")?;
     let crate_name = resolve_crate_name(name);
 
     // Step 1: Read the battery pack spec WITHOUT modifying any manifests.
@@ -602,7 +604,7 @@ pub fn add_battery_pack(
     // [impl cli.path.flag]
     // [impl cli.path.no-resolve]
     // [impl cli.source.replace]
-    let (bp_version, bp_spec) = if let Some(local_path) = path {
+    let (bp_version, bp_spec) = if let Some(ref local_path) = args.path {
         let manifest_path = Path::new(local_path).join("Cargo.toml");
         let manifest_content = std::fs::read_to_string(&manifest_path)
             .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
@@ -618,10 +620,10 @@ pub fn add_battery_pack(
     let resolved = resolve_add_crates(
         &bp_spec,
         &crate_name,
-        with_features,
-        no_default_features,
-        all_features,
-        specific_crates,
+        &args.features,
+        args.no_default_features,
+        args.all_features,
+        &args.crates,
     );
     let (active_features, crates_to_sync) = match resolved {
         ResolvedAdd::Crates {
@@ -665,9 +667,9 @@ pub fn add_battery_pack(
     let build_deps =
         user_doc["build-dependencies"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
     if let Some(table) = build_deps.as_table_mut() {
-        if let Some(local_path) = path {
+        if let Some(ref local_path) = args.path {
             let mut dep = toml_edit::InlineTable::new();
-            dep.insert("path", toml_edit::Value::from(local_path));
+            dep.insert("path", toml_edit::Value::from(local_path.as_str()));
             table.insert(
                 &crate_name,
                 toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
@@ -708,9 +710,9 @@ pub fn add_battery_pack(
             .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
         if let Some(ws_table) = ws_deps.as_table_mut() {
             // Add the battery pack itself to workspace deps
-            if let Some(local_path) = path {
+            if let Some(ref local_path) = args.path {
                 let mut dep = toml_edit::InlineTable::new();
-                dep.insert("path", toml_edit::Value::from(local_path));
+                dep.insert("path", toml_edit::Value::from(local_path.as_str()));
                 ws_table.insert(
                     &crate_name,
                     toml_edit::Item::Value(toml_edit::Value::InlineTable(dep)),
@@ -740,7 +742,7 @@ pub fn add_battery_pack(
     // [impl manifest.features.storage]
     // [impl cli.add.target]
     // Record active features — location depends on --target flag
-    let use_workspace_metadata = match target {
+    let use_workspace_metadata = match args.target {
         Some(AddTarget::Workspace) => true,
         Some(AddTarget::Package) => false,
         Some(AddTarget::Default) | None => workspace_manifest.is_some(),
@@ -1782,59 +1784,6 @@ fn ensure_battery_pack_suffix(name: Option<String>) -> Result<String> {
         println!("Renaming project to: {}", fixed);
         Ok(fixed)
     }
-}
-
-fn generate_from_path(
-    crate_path: &Path,
-    template_path: &str,
-    name: Option<String>,
-    defines: std::collections::BTreeMap<String, String>,
-) -> Result<()> {
-    // Ensure the project name ends with -battery-pack.
-    // We always resolve the name before calling the template engine so the suffix
-    // applies to both the directory name and the project-name variable.
-    let project_name = ensure_battery_pack_suffix(name)?;
-
-    let opts = template_engine::GenerateOpts {
-        render: template_engine::RenderOpts {
-            crate_root: crate_path.to_path_buf(),
-            template_path: template_path.to_string(),
-            project_name,
-            defines,
-        },
-        destination: None,
-        git_init: true,
-    };
-
-    template_engine::generate(opts)?;
-
-    Ok(())
-}
-
-fn preview_from_path(
-    crate_path: &Path,
-    template_path: &str,
-    name: Option<String>,
-    defines: std::collections::BTreeMap<String, String>,
-) -> Result<()> {
-    let project_name = name.unwrap_or_else(|| "my-project".to_string());
-
-    let opts = template_engine::RenderOpts {
-        crate_root: crate_path.to_path_buf(),
-        template_path: template_path.to_string(),
-        project_name,
-        defines,
-    };
-
-    let files = template_engine::preview(opts)?;
-
-    for file in &files {
-        println!("── {} ──", file.path);
-        println!("{}", file.content);
-        println!();
-    }
-
-    Ok(())
 }
 
 /// Parse a `key=value` string for clap's `value_parser`.

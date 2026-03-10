@@ -49,7 +49,7 @@ fn new_name_flag_is_parsed() {
             .expect("--name flag should be accepted");
 
     match unwrap_bp_command(cli) {
-        Some(bphelper_cli::BpCommands::New { name, .. }) => {
+        Some(bphelper_cli::BpCommands::New(bphelper_cli::NewArgs { name, .. })) => {
             assert_eq!(name.as_deref(), Some("my-project"));
         }
         None => panic!("expected Some(New), got None"),
@@ -65,7 +65,7 @@ fn new_name_short_flag_is_parsed() {
         .expect("-n flag should be accepted");
 
     match unwrap_bp_command(cli) {
-        Some(bphelper_cli::BpCommands::New { name, .. }) => {
+        Some(bphelper_cli::BpCommands::New(bphelper_cli::NewArgs { name, .. })) => {
             assert_eq!(name.as_deref(), Some("my-project"));
         }
         None => panic!("expected Some(New), got None"),
@@ -86,7 +86,7 @@ fn new_without_name_parses_as_none() {
         .expect("new without --name should parse");
 
     match unwrap_bp_command(cli) {
-        Some(bphelper_cli::BpCommands::New { name, .. }) => {
+        Some(bphelper_cli::BpCommands::New(bphelper_cli::NewArgs { name, .. })) => {
             assert!(name.is_none(), "name should be None when --name is omitted");
         }
         None => panic!("expected Some(New), got None"),
@@ -207,7 +207,7 @@ fn new_preview_flag_is_parsed() {
         .expect("--preview flag should be accepted");
 
     match unwrap_bp_command(cli) {
-        Some(bphelper_cli::BpCommands::New { preview, .. }) => {
+        Some(bphelper_cli::BpCommands::New(bphelper_cli::NewArgs { preview, .. })) => {
             assert!(preview, "preview should be true");
         }
         None => panic!("expected Some(New), got None"),
@@ -221,7 +221,7 @@ fn new_preview_defaults_to_false() {
         .expect("new without --preview should parse");
 
     match unwrap_bp_command(cli) {
-        Some(bphelper_cli::BpCommands::New { preview, .. }) => {
+        Some(bphelper_cli::BpCommands::New(bphelper_cli::NewArgs { preview, .. })) => {
             assert!(!preview, "preview should default to false");
         }
         None => panic!("expected Some(New), got None"),
