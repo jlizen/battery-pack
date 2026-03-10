@@ -188,6 +188,39 @@ prompt = "What does this project do?"
 default = "A new project"
 ```
 
+Placeholders should have `default` values so that `cargo bp validate`
+can generate and check templates non-interactively. Placeholder names
+must use snake_case (`description`, not `my-description`) because
+MiniJinja treats `-` as the minus operator.
+
+The template engine also provides built-in variables (no declaration needed):
+
+- `{{ project_name }}` — the project name passed via `--name`
+- `{{ crate_name }}` — derived from `project_name` with `-` replaced by `_`
+
+To include files from outside the template directory (e.g. shared
+license files), use `[[files]]`:
+
+```toml
+[[files]]
+src = "LICENSE-MIT"       # relative to crate root
+dest = "LICENSE-MIT"      # relative to generated project
+```
+
+Register templates in your Cargo.toml metadata:
+
+```toml
+[package.metadata.battery.templates]
+default = { path = "templates/default", description = "A basic starting point" }
+subcmds = { path = "templates/subcmds", description = "Multi-command CLI" }
+```
+
+If you have multiple templates, users can choose:
+
+```bash
+cargo bp new my-pack --template subcmds
+```
+
 ### Managed dependencies
 
 Use `bp-managed = true` on dependencies in your template's Cargo.toml
@@ -220,39 +253,6 @@ anyhow = { bp-managed = true }
 
 # Explicit — left as-is during resolution:
 clap = { version = "4", features = ["derive", "color"] }
-```
-
-Placeholders should have `default` values so that `cargo bp validate`
-can generate and check templates non-interactively. Placeholder names
-must use snake_case (`description`, not `my-description`) because
-MiniJinja treats `-` as the minus operator.
-
-The template engine also provides built-in variables (no declaration needed):
-
-- `{{ project_name }}` — the project name passed via `--name`
-- `{{ crate_name }}` — derived from `project_name` with `-` replaced by `_`
-
-To include files from outside the template directory (e.g. shared
-license files), use `[[files]]`:
-
-```toml
-[[files]]
-src = "LICENSE-MIT"       # relative to crate root
-dest = "LICENSE-MIT"      # relative to generated project
-```
-
-Register templates in your Cargo.toml metadata:
-
-```toml
-[package.metadata.battery.templates]
-default = { path = "templates/default", description = "A basic starting point" }
-subcmds = { path = "templates/subcmds", description = "Multi-command CLI" }
-```
-
-If you have multiple templates, users can choose:
-
-```bash
-cargo bp new my-pack --template subcmds
 ```
 
 ### Validating templates
