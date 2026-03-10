@@ -190,9 +190,9 @@ fn render(
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
-    // Resolve bp-managed dependencies in the rendered Cargo.toml.
-    if let Some(cargo) = files.iter_mut().find(|f| f.path == "Cargo.toml") {
-        cargo.content = crate::resolve_bp_managed_content(&cargo.content, crate_root)?;
+    // Resolve bp-managed dependencies in all rendered Cargo.toml files.
+    for file in files.iter_mut().filter(|f| f.path.ends_with("Cargo.toml")) {
+        file.content = crate::resolve_bp_managed_content(&file.content, crate_root)?;
     }
 
     Ok(files)
@@ -623,7 +623,7 @@ mod tests {
             .unwrap()
             .join("tests/fixtures/managed-battery-pack");
 
-        let opts = super::PreviewOpts {
+        let opts = super::RenderOpts {
             crate_root: fixtures,
             template_path: "templates/default".to_string(),
             project_name: "my-project".to_string(),
