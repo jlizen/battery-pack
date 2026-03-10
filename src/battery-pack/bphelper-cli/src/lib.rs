@@ -437,8 +437,11 @@ fn new_from_battery_pack(args: NewArgs, source: &CrateSource) -> Result<()> {
             args.name.unwrap_or_else(|| "my-project".to_string())
         } else {
             let raw = prompt_project_name(args.name)?;
-            // for the battery-pack crate, we special cased it to force
-            // the project name to be `-battery-pack`, and append it if not.
+            // For the battery-pack crate, we special case it to resolve
+            // the project name as `*-battery-pack`.
+            //
+            // TODO: We can add pre/post hooks to our bp-template.toml
+            // if there are more fancy template use cases
             if args.battery_pack == "battery-pack" {
                 ensure_battery_pack_suffix(raw)
             } else {
