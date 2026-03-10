@@ -1780,6 +1780,150 @@ fn resolve_local_template(local_path: &str, template: Option<&str>) -> Result<(P
     Ok((local_path.to_path_buf(), template_path))
 }
 
+// ============================================================================
+// bp-managed dependency resolution
+// ============================================================================
+
+/// Resolve `bp-managed = true` dependencies in a Cargo.toml string,
+/// returning the rewritten content with concrete versions.
+pub fn resolve_bp_managed_content(content: &str, bp_crate_root: &Path) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = content.parse().context("failed to parse Cargo.toml")?;
+
+    // Collect all bp-managed dep names across all sections.
+    let sections = ["dependencies", "dev-dependencies", "build-dependencies"];
+    let mut has_managed = false;
+    for section in &sections {
+        if let Some(table) = doc.get(section).and_then(|v| v.as_table()) {
+            for (name, value) in table.iter() {
+                if is_bp_managed(value) {
+                    has_managed = true;
+                    let extra = extra_keys_on_bp_managed(value);
+                    if !extra.is_empty() {
+                        bail!(
+                            "dependency '{}' in [{}] has `bp-managed = true` with conflicting keys: {}",
+                            name,
+                            section,
+                            extra.join(", ")
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if !has_managed {
+        return Ok(content.to_string());
+    }
+
+    // Read active features for each battery pack from the generated manifest's metadata.
+    let raw: toml::Value = toml::from_str(content).context("failed to parse Cargo.toml")?;
+
+    // Discover battery pack specs reachable from bp_crate_root.
+    let all_specs = bphelper_manifest::discover_from_crate_root(bp_crate_root)?;
+
+    // Build a merged map of crate_name -> (version, features, dep_kind) from all
+    // battery packs referenced in the generated project's metadata.
+    let mut resolved: std::collections::BTreeMap<String, bphelper_manifest::CrateSpec> =
+        std::collections::BTreeMap::new();
+    // Also track battery pack versions for resolving bp-managed build-deps.
+    let mut bp_versions: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+
+    let bp_metadata = raw
+        .get("package")
+        .and_then(|p| p.get("metadata"))
+        .and_then(|m| m.get("battery-pack"))
+        .and_then(|bp| bp.as_table());
+
+    if let Some(bp_table) = bp_metadata {
+        for (bp_name, _entry) in bp_table {
+            let active_features = read_features_at(&raw, &["package", "metadata"], bp_name);
+
+            let spec = if let Some(s) = all_specs.iter().find(|s| s.name == *bp_name) {
+                s.clone()
+            } else {
+                // Battery pack not in local workspace; fetch from crates.io.
+                let (_version, s) = fetch_bp_spec_from_registry(bp_name).with_context(|| {
+                    format!("battery pack '{bp_name}' not found locally or on crates.io")
+                })?;
+                s
+            };
+
+            bp_versions.insert(bp_name.clone(), spec.version.clone());
+            let crates = spec.resolve_for_features(&active_features);
+            for (crate_name, crate_spec) in crates {
+                resolved.insert(crate_name, crate_spec);
+            }
+        }
+    }
+
+    // Rewrite bp-managed entries with resolved versions.
+    for section in &sections {
+        let Some(table) = doc.get_mut(section).and_then(|v| v.as_table_mut()) else {
+            continue;
+        };
+
+        let managed_names: Vec<String> = table
+            .iter()
+            .filter(|(_, v)| is_bp_managed_item(v))
+            .map(|(k, _)| k.to_string())
+            .collect();
+
+        for name in managed_names {
+            if let Some(crate_spec) = resolved.get(&name) {
+                // Regular dependency managed by a battery pack.
+                add_dep_to_table(table, &name, crate_spec);
+            } else if let Some(bp_version) = bp_versions.get(&name) {
+                // Battery pack itself in [build-dependencies].
+                table.insert(&name, toml_edit::value(bp_version));
+            } else {
+                bail!(
+                    "dependency '{}' in [{}] has `bp-managed = true` but no battery pack provides it",
+                    name,
+                    section
+                );
+            }
+        }
+    }
+
+    Ok(doc.to_string())
+}
+
+/// Check if a toml_edit Item has `bp-managed = true`.
+fn is_bp_managed_item(item: &toml_edit::Item) -> bool {
+    match item {
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(t)) => t
+            .get("bp-managed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        toml_edit::Item::Table(t) => t
+            .get("bp-managed")
+            .and_then(|v| v.as_value())
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Check if a toml::Value has `bp-managed = true`.
+fn is_bp_managed(value: &toml_edit::Item) -> bool {
+    is_bp_managed_item(value)
+}
+
+/// Return any keys besides `bp-managed` on a bp-managed dep entry.
+fn extra_keys_on_bp_managed(value: &toml_edit::Item) -> Vec<String> {
+    let keys: Box<dyn Iterator<Item = &str>> = match value {
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(t)) => {
+            Box::new(t.iter().map(|(k, _)| k))
+        }
+        toml_edit::Item::Table(t) => Box::new(t.iter().map(|(k, _)| k)),
+        _ => return vec![],
+    };
+    keys.filter(|k| *k != "bp-managed")
+        .map(String::from)
+        .collect()
+}
+
 /// Prompt for a project name if not provided.
 fn prompt_project_name(name: Option<String>) -> Result<String> {
     match name {
@@ -2910,10 +3054,6 @@ pub fn validate_templates(manifest_dir: &str) -> Result<()> {
 
         let project_dir = template_engine::generate(opts)
             .with_context(|| format!("failed to generate template '{name}'"))?;
-
-        // Resolve bp-managed dependencies from battery pack specs.
-        resolve_bp_managed(&project_dir, manifest_dir)
-            .with_context(|| format!("failed to resolve bp-managed deps for template '{name}'"))?;
 
         // Patch crates-io deps to use local workspace packages so we validate
         // against the current source, not the published versions.

@@ -14,16 +14,9 @@ fn fixtures_dir() -> std::path::PathBuf {
         .join("tests/fixtures")
 }
 
-/// Create a temp project with the given Cargo.toml content and run resolve_bp_managed.
+/// Resolve bp-managed deps in a Cargo.toml string using the given fixture as the bp crate root.
 fn resolve_with_fixture(cargo_toml: &str, bp_crate_root: &Path) -> anyhow::Result<String> {
-    let tmp = tempfile::tempdir().unwrap();
-    let project_dir = tmp.path().join("test-project");
-    std::fs::create_dir_all(&project_dir).unwrap();
-    std::fs::write(project_dir.join("Cargo.toml"), cargo_toml).unwrap();
-
-    bphelper_cli::resolve_bp_managed(&project_dir, bp_crate_root)?;
-
-    Ok(std::fs::read_to_string(project_dir.join("Cargo.toml")).unwrap())
+    bphelper_cli::resolve_bp_managed_content(cargo_toml, bp_crate_root)
 }
 
 #[test]
