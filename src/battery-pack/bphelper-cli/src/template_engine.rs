@@ -189,6 +189,17 @@ fn render(
     }
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // Resolve bp-managed dependencies in all rendered Cargo.toml files.
+    // Resolution is best-effort: nested template Cargo.toml files (e.g. in a
+    // battery-pack-of-battery-packs) may reference battery packs that don't
+    // exist yet, so we silently skip files that fail to resolve.
+    for file in files.iter_mut().filter(|f| f.path.ends_with("Cargo.toml")) {
+        if let Ok(resolved) = crate::resolve_bp_managed_content(&file.content, crate_root) {
+            file.content = resolved;
+        }
+    }
+
     Ok(files)
 }
 
@@ -574,14 +585,14 @@ mod tests {
             .unwrap()
             .join("tests/fixtures/fancy-battery-pack");
 
-        let opts = super::RenderOpts {
+        let opts = RenderOpts {
             crate_root: fixtures,
             template_path: "templates/default".to_string(),
             project_name: "my-project".to_string(),
             defines: BTreeMap::new(),
         };
 
-        let files = super::preview(opts).unwrap();
+        let files = preview(opts).unwrap();
         assert!(!files.is_empty(), "preview should produce files");
 
         // Should contain Cargo.toml with rendered project name
@@ -602,5 +613,47 @@ mod tests {
         let mut sorted = paths.clone();
         sorted.sort();
         assert_eq!(paths, sorted, "files should be sorted by path");
+    }
+
+    #[test]
+    fn preview_resolves_bp_managed_deps() {
+        use expect_test::expect;
+
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/managed-battery-pack");
+
+        let opts = RenderOpts {
+            crate_root: fixtures,
+            template_path: "templates/default".to_string(),
+            project_name: "my-project".to_string(),
+            defines: BTreeMap::new(),
+        };
+
+        let files = preview(opts).unwrap();
+        let cargo = files.iter().find(|f| f.path == "Cargo.toml").unwrap();
+
+        expect![[r#"
+            [package]
+            name = "my-project"
+            version = "0.1.0"
+            edition = "2021"
+
+            [dependencies]
+            anyhow = "1"
+            clap = { version = "4", features = ["derive"] }
+
+            [build-dependencies]
+            managed-battery-pack = "0.2.0"
+
+            [package.metadata.battery-pack]
+            managed-battery-pack = { features = ["default"] }
+        "#]]
+        .assert_eq(&cargo.content);
     }
 }

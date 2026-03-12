@@ -76,6 +76,48 @@ it from the appropriate dependency section. If using workspace
 dependencies, the `workspace.dependencies` entry SHOULD be preserved
 (other crates in the workspace may use it).
 
+## Managed dependencies in templates
+
+r[manifest.managed.marker]
+A template's Cargo.toml MAY use `bp-managed = true` on a dependency
+instead of hardcoding a version. This signals that the version should
+be resolved at template generation time from the battery pack's own spec.
+
+```toml
+[dependencies]
+clap = { bp-managed = true }
+
+[build-dependencies]
+cli-battery-pack = { bp-managed = true }
+```
+
+r[manifest.managed.conflict]
+A dependency MUST NOT have both `bp-managed = true` and any other keys
+(`version`, `features`, `default-features`, etc.). `cargo bp` MUST
+error if `bp-managed` is combined with other dependency keys.
+
+r[manifest.managed.resolution]
+When generating a project from a template, `cargo bp` MUST resolve
+each `bp-managed` dependency by replacing the entire entry with the
+version and Cargo features from the battery pack's spec. Specs are
+discovered from the crate root's workspace first. If a referenced
+battery pack is not found locally (e.g. a cross-pack reference after
+downloading from crates.io), `cargo bp` MUST fetch its spec from the
+registry. Battery pack crates in `[build-dependencies]` get the
+battery pack's own version.
+
+r[manifest.managed.no-partial]
+Partial overrides are not supported. A `bp-managed` dependency cannot
+selectively manage only the version or only the features. The spec
+controls both. To customize features or pin a specific version, use
+an explicit dependency entry instead of `bp-managed = true`. If you
+have a use case for partial overrides, please [open an issue](https://github.com/battery-pack-rs/battery-pack/issues).
+
+r[manifest.managed.explicit-override]
+A template MAY use an explicit version instead of `bp-managed = true`
+to pin a specific version or specify custom features. Explicit
+dependencies are left as-is and not modified during resolution.
+
 ## Cross-pack merging
 
 r[manifest.merge.version]

@@ -6,18 +6,16 @@ description = "A CLI application"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-dialoguer = "0.11"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = { bp-managed = true }
+clap = { bp-managed = true }
+dialoguer = { bp-managed = true }
+tracing = { bp-managed = true }
+tracing-subscriber = { bp-managed = true }
 
 [build-dependencies]
-cli-battery-pack = "0.4"
-logging-battery-pack = "0.4"
+cli-battery-pack = { bp-managed = true }
+logging-battery-pack = { bp-managed = true }
 
-[package.metadata.battery-pack.cli-battery-pack]
-features = ["default"]
-
-[package.metadata.battery-pack.logging-battery-pack]
-features = ["default"]
+[package.metadata.battery-pack]
+cli-battery-pack = { features = ["default"] }
+logging-battery-pack = { features = ["default"] }

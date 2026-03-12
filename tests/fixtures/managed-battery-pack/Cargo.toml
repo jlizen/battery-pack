@@ -1,0 +1,20 @@
+[package]
+name = "managed-battery-pack"
+version = "0.2.0"
+edition = "2021"
+description = "A test battery pack for bp-managed resolution"
+repository = "https://github.com/example/managed"
+keywords = ["battery-pack"]
+
+[dependencies]
+anyhow = { version = "1", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+
+[features]
+default = ["anyhow", "clap"]
+
+[package.metadata.battery-pack]
+hidden = []
+
+[package.metadata.battery.templates]
+default = { path = "templates/default", description = "Basic app with bp-managed deps" }

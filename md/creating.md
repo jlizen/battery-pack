@@ -221,6 +221,40 @@ If you have multiple templates, users can choose:
 cargo bp new my-pack --template subcmds
 ```
 
+### Managed dependencies
+
+Use `bp-managed = true` on dependencies in your template's Cargo.toml
+instead of hardcoding versions. When someone generates a project from
+your template, `cargo bp` resolves the actual versions from your
+battery pack's spec:
+
+```toml
+[dependencies]
+clap = { bp-managed = true }
+
+[build-dependencies]
+cli-battery-pack = { bp-managed = true }
+
+[package.metadata.battery-pack]
+cli-battery-pack = { features = ["default"] }
+```
+
+This way you don't need to update template files when you bump
+dependency versions. The template always picks up the current spec.
+
+`bp-managed = true` replaces the entire dependency entry with the
+version and features from the spec. If you need to pin a specific
+version or customize features for a dependency, use an explicit
+entry instead:
+
+```toml
+# Managed: version and features come from the spec:
+anyhow = { bp-managed = true }
+
+# Explicit: left as-is during resolution:
+clap = { version = "4", features = ["derive", "color"] }
+```
+
 ### Validating templates
 
 `cargo bp validate` automatically generates each template, runs

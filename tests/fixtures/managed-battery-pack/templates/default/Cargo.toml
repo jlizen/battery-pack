@@ -1,0 +1,14 @@
+[package]
+name = "{{ project_name }}"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { bp-managed = true }
+clap = { bp-managed = true }
+
+[build-dependencies]
+managed-battery-pack = { bp-managed = true }
+
+[package.metadata.battery-pack]
+managed-battery-pack = { features = ["default"] }
