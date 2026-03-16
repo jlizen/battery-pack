@@ -1,5 +1,8 @@
 # Contributing
 
+> [!tip]
+> Use the `init.py` script to initialise git pre-push hooks that check the formatting of your code before CI, catching common mistakes. Note that you need `typos-cli` for it to work.
+
 ## Doing releases
 
 There is a `.github/workflows/release-plz.yml` workflow that automates releases via [release-plz]. On every push to `main`, it:
