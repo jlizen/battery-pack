@@ -78,6 +78,16 @@ where you can:
 The subcommands (`cargo bp add`, `cargo bp status`, etc.) are there for
 scripting and quick one-off operations, but the TUI is the primary experience.
 
+## Templates
+
+Some battery packs include project templates that scaffold a new Rust project with the right crates and structure already in place. You can create a new project from a template with `cargo bp new`:
+
+```bash
+cargo bp new cli
+```
+
+See [Using Battery Packs](./using.md#creating-a-new-project-from-a-template) for more on templates, including how to preview generated output with `cargo bp new --preview`.
+
 ## What's next
 
 - **[Getting Started](./getting-started.md)** walks you through installing the CLI and using your first battery pack
