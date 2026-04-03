@@ -1063,6 +1063,33 @@ fn add_default_crates_basic() {
     .assert_eq(&deps);
 }
 
+#[test]
+fn add_default_includes_dev_and_build_deps() {
+    let tmp = make_temp_project();
+    add(
+        "managed",
+        "managed-battery-pack",
+        &["default"],
+        FeatureMode::Default,
+        &[],
+        None,
+        tmp.path(),
+    );
+
+    let content = read_cargo_toml(&tmp);
+    let dev_deps = extract_section(&content, "[dev-dependencies]");
+    let build_deps = extract_section(&content, "[build-dependencies]");
+
+    assert!(
+        dev_deps.contains("insta"),
+        "dev-dep should be included with default features: {dev_deps}"
+    );
+    assert!(
+        build_deps.contains("cc"),
+        "build-dep should be included with default features: {build_deps}"
+    );
+}
+
 // ============================================================================
 // cli.add.features — named feature crates written
 // ============================================================================
