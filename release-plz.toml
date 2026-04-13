@@ -1,6 +1,7 @@
 # All crates get published to crates.io when their version changes.
-# Only battery-pack gets a GitHub release; all other crates roll their
-# commits into the battery-pack changelog so there's one unified release post.
+# battery-pack and battery-pack-cli get GitHub releases; all other crates
+# roll their commits into the battery-pack changelog so there's one
+# unified release post for library changes.
 [workspace]
 git_release_enable = false
 
@@ -17,3 +18,8 @@ changelog_include = [
     "error-battery-pack",
     "logging-battery-pack",
 ]
+
+[[package]]
+name = "battery-pack-cli"
+git_release_enable = true
+changelog_include = ["bphelper-cli"]

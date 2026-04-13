@@ -16,9 +16,9 @@ Think of it like an addition to the standard library targeting a particular use 
 ## Installing the CLI
 
 ```bash
-cargo install battery-pack
+cargo install battery-pack-cli
 # or
-cargo binstall battery-pack
+cargo binstall battery-pack-cli
 ```
 
 ## Using the CLI
