@@ -3,7 +3,7 @@
 ## Install the CLI
 
 ```bash
-cargo install battery-pack-cli
+cargo install cargo-bp
 ```
 
 This gives you the `cargo bp` command.

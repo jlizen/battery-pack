@@ -1,5 +1,5 @@
 [package]
-name = "battery-pack-cli"
+name = "cargo-bp"
 version = "0.4.11"
 edition = "2024"
 description = "CLI for creating and managing battery packs (cargo bp)"
@@ -9,7 +9,7 @@ keywords = ["battery-pack", "cli", "cargo"]
 readme = "../../README.md"
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/battery-pack-cli-v{ version }/cargo-bp-{ target }-v{ version }{ archive-suffix }"
+pkg-url = "{ repo }/releases/download/cargo-bp-v{ version }/cargo-bp-{ target }-v{ version }{ archive-suffix }"
 pkg-fmt = "tgz"
 
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]

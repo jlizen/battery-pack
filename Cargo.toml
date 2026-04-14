@@ -3,7 +3,7 @@ members = [
 	# --- main facade
     "src/battery-pack",
 	# --- CLI binary
-    "src/battery-pack-cli",
+    "src/cargo-bp",
 	# --- helper crates
     "src/battery-pack/bphelper-build",
     "src/battery-pack/bphelper-cli",
