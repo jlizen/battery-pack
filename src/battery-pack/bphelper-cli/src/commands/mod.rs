@@ -1767,7 +1767,6 @@ fn status_battery_packs(
                 short_name: short_name(&bp_name).to_string(),
                 version: spec.version.clone(),
                 spec,
-                name: bp_name,
                 active_features,
             })
         })
