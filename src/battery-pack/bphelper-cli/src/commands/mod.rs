@@ -122,6 +122,21 @@ pub(crate) enum BpCommands {
         path: Option<String>,
     },
 
+    /// Remove a battery pack from the current project
+    #[command(visible_alias = "remove")]
+    Rm {
+        /// Name of the battery pack to remove (e.g., "cli" resolves to "cli-battery-pack")
+        battery_pack: String,
+
+        /// Also remove dependencies that were added by the tool
+        #[arg(long, conflicts_with = "keep_deps")]
+        remove_deps: bool,
+
+        /// Keep all dependencies (don't prompt)
+        #[arg(long)]
+        keep_deps: bool,
+    },
+
     /// List available battery packs on crates.io
     #[command(visible_alias = "ls")]
     List {
@@ -223,6 +238,17 @@ pub fn main() -> Result<()> {
                 BpCommands::Sync { path } => {
                     sync_battery_packs(&project_dir, path.as_deref(), &source)
                 }
+                BpCommands::Rm {
+                    battery_pack,
+                    remove_deps,
+                    keep_deps,
+                } => remove_battery_pack(
+                    &battery_pack,
+                    remove_deps,
+                    keep_deps,
+                    interactive,
+                    &project_dir,
+                ),
                 BpCommands::List {
                     filter,
                     non_interactive,
@@ -672,6 +698,219 @@ pub(crate) fn add_battery_pack(
 }
 
 /// Show a helpful message when `cargo bp add` is run without arguments.
+/// Determine which managed deps are safe to remove (not shared with other packs).
+pub(crate) fn deps_safe_to_remove(
+    managed_deps: &BTreeSet<String>,
+    all_bp_names: &[String],
+    current_bp: &str,
+    metadata_location: &MetadataLocation,
+    user_manifest_content: &str,
+) -> BTreeSet<String> {
+    let mut shared = BTreeSet::new();
+    for other_bp in all_bp_names {
+        if other_bp == current_bp {
+            continue;
+        }
+        if let Some(other_managed) =
+            read_managed_deps_from(metadata_location, user_manifest_content, other_bp)
+        {
+            shared.extend(other_managed.intersection(managed_deps).cloned());
+        }
+    }
+    managed_deps.difference(&shared).cloned().collect()
+}
+
+fn remove_battery_pack(
+    name: &str,
+    remove_deps: bool,
+    keep_deps: bool,
+    interactive: bool,
+    project_dir: &Path,
+) -> Result<()> {
+    let crate_name = resolve_crate_name(name);
+    let user_manifest_path = find_user_manifest(project_dir)?;
+    let user_manifest_content =
+        std::fs::read_to_string(&user_manifest_path).context("Failed to read Cargo.toml")?;
+
+    // Verify the pack is installed
+    let bp_names = find_installed_bp_names(&user_manifest_content)?;
+    if !bp_names.contains(&crate_name) {
+        bail!("Battery pack '{}' is not installed", crate_name);
+    }
+
+    let metadata_location = resolve_metadata_location(&user_manifest_path)?;
+    let managed_deps =
+        read_managed_deps_from(&metadata_location, &user_manifest_content, &crate_name);
+
+    // Determine which deps to remove
+    let should_remove_deps = if managed_deps.is_none() {
+        // Pre-migration: no managed-deps, don't touch deps
+        false
+    } else if remove_deps {
+        true
+    } else if keep_deps {
+        false
+    } else if interactive {
+        // Prompt
+        let safe = deps_safe_to_remove(
+            managed_deps.as_ref().unwrap(),
+            &bp_names,
+            &crate_name,
+            &metadata_location,
+            &user_manifest_content,
+        );
+        if safe.is_empty() {
+            false
+        } else {
+            println!("The following dependencies were added by {}:", crate_name);
+            for dep in &safe {
+                println!("  {}", dep);
+            }
+            dialoguer::Confirm::new()
+                .with_prompt("Also remove these dependencies?")
+                .default(false)
+                .interact()
+                .unwrap_or(false)
+        }
+    } else {
+        false // non-TTY default
+    };
+
+    let mut user_doc: toml_edit::DocumentMut = user_manifest_content
+        .parse()
+        .context("Failed to parse Cargo.toml")?;
+
+    let workspace_manifest = find_workspace_manifest(&user_manifest_path)?;
+
+    // Remove battery pack from [build-dependencies]
+    if let Some(table) = user_doc
+        .get_mut("build-dependencies")
+        .and_then(|t| t.as_table_mut())
+    {
+        table.remove(&crate_name);
+    }
+
+    // Remove managed deps if confirmed
+    if should_remove_deps {
+        if let Some(ref managed) = managed_deps {
+            let safe = deps_safe_to_remove(
+                managed,
+                &bp_names,
+                &crate_name,
+                &metadata_location,
+                &user_manifest_content,
+            );
+
+            // Remove from user doc (all dep sections)
+            for section in ["dependencies", "dev-dependencies"] {
+                if let Some(table) = user_doc.get_mut(section).and_then(|t| t.as_table_mut()) {
+                    for dep in &safe {
+                        table.remove(dep.as_str());
+                    }
+                }
+            }
+
+            // Remove from workspace deps
+            if let Some(ref ws_path) = workspace_manifest {
+                let ws_content = std::fs::read_to_string(ws_path)
+                    .context("Failed to read workspace Cargo.toml")?;
+                let mut ws_doc: toml_edit::DocumentMut = ws_content
+                    .parse()
+                    .context("Failed to parse workspace Cargo.toml")?;
+
+                if let Some(ws_table) = ws_doc
+                    .get_mut("workspace")
+                    .and_then(|w| w.get_mut("dependencies"))
+                    .and_then(|d| d.as_table_mut())
+                {
+                    for dep in &safe {
+                        ws_table.remove(dep.as_str());
+                    }
+                    // Also remove the battery pack itself from workspace deps
+                    ws_table.remove(&crate_name);
+                }
+
+                // Remove metadata from workspace if that's where it lives
+                if matches!(metadata_location, MetadataLocation::Workspace { .. }) {
+                    if let Some(bp_table) = ws_doc
+                        .get_mut("workspace")
+                        .and_then(|w| w.get_mut("metadata"))
+                        .and_then(|m| m.get_mut("battery-pack"))
+                        .and_then(|bp| bp.as_table_mut())
+                    {
+                        bp_table.remove(&crate_name);
+                    }
+                }
+
+                std::fs::write(ws_path, ws_doc.to_string())
+                    .context("Failed to write workspace Cargo.toml")?;
+            }
+
+            if !safe.is_empty() {
+                println!("Removed {} dependency(ies)", safe.len());
+            }
+        }
+    }
+
+    // Remove metadata from package if that's where it lives
+    if matches!(metadata_location, MetadataLocation::Package) {
+        if let Some(bp_table) = user_doc
+            .get_mut("package")
+            .and_then(|p| p.get_mut("metadata"))
+            .and_then(|m| m.get_mut("battery-pack"))
+            .and_then(|bp| bp.as_table_mut())
+        {
+            bp_table.remove(&crate_name);
+        }
+    }
+
+    std::fs::write(&user_manifest_path, user_doc.to_string())
+        .context("Failed to write Cargo.toml")?;
+
+    // Clean up build.rs
+    let build_rs_path = user_manifest_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("build.rs");
+    cleanup_build_rs(&build_rs_path, &crate_name)?;
+
+    println!("Removed {}", crate_name);
+    Ok(())
+}
+
+/// Remove a validate() call from build.rs. If the file becomes an empty main,
+/// delete it entirely.
+fn cleanup_build_rs(build_rs_path: &Path, crate_name: &str) -> Result<()> {
+    if !build_rs_path.exists() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(build_rs_path).context("Failed to read build.rs")?;
+    let crate_ident = crate_name.replace('-', "_");
+    let validate_call = format!("{}::validate();", crate_ident);
+
+    if !content.contains(&validate_call) {
+        return Ok(()); // Nothing to remove
+    }
+
+    // Remove the line containing the validate call
+    let new_lines: Vec<&str> = content
+        .lines()
+        .filter(|line| !line.trim().starts_with(&validate_call))
+        .collect();
+    let new_content = new_lines.join("\n") + "\n";
+
+    // Check if the remaining content is just an empty main
+    let trimmed = new_content.replace(char::is_whitespace, "");
+    if trimmed == "fnmain(){}" {
+        std::fs::remove_file(build_rs_path).context("Failed to delete build.rs")?;
+    } else {
+        std::fs::write(build_rs_path, new_content).context("Failed to write build.rs")?;
+    }
+
+    Ok(())
+}
+
 fn show_add_help(project_dir: &Path) -> Result<()> {
     let manifest_path = find_user_manifest(project_dir);
     let installed = manifest_path.ok().and_then(|p| {
