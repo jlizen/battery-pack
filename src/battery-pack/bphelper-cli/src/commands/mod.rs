@@ -1630,6 +1630,15 @@ fn print_battery_pack_detail(name: &str, path: Option<&str>, source: &CrateSourc
         }
     }
 
+    // Features
+    if !detail.features.is_empty() {
+        println!();
+        println!("{}", style("Features:").bold());
+        for (feat_name, members) in &detail.features {
+            println!("  {} → {}", style(feat_name).cyan(), members.join(", "));
+        }
+    }
+
     // Extends
     if !detail.extends.is_empty() {
         println!();

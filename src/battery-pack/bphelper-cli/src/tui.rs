@@ -1806,6 +1806,19 @@ fn render_detail(frame: &mut Frame, state: &DetailScreen) {
         |crate_name| crate_name.clone(),
     ));
 
+    // Features (non-selectable, informational)
+    if !detail.features.is_empty() {
+        lines.push(Line::styled("Features:", Style::default().bold()));
+        for (feat_name, members) in &detail.features {
+            lines.push(Line::from(format!(
+                "  {} → {}",
+                feat_name,
+                members.join(", ")
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+
     selected_line = selected_line.or(render_selectable_section(
         &mut lines,
         &mut item_index,

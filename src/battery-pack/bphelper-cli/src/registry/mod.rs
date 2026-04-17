@@ -7,7 +7,7 @@
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tar::Archive;
 
@@ -123,6 +123,7 @@ pub(crate) struct BatteryPackDetail {
     pub owners: Vec<OwnerInfo>,
     pub crates: Vec<String>,
     pub extends: Vec<String>,
+    pub features: BTreeMap<String, Vec<String>>,
     pub templates: Vec<TemplateInfo>,
     pub examples: Vec<ExampleInfo>,
 }
@@ -736,6 +737,21 @@ pub(crate) fn build_battery_pack_detail(
     // Scan examples directory
     let examples = scan_examples(crate_dir, repo_tree.as_deref());
 
+    // Build features map (sorted, visible crates only)
+    let features: BTreeMap<String, Vec<String>> = spec
+        .features
+        .iter()
+        .map(|(name, members)| {
+            let visible: Vec<String> = members
+                .iter()
+                .filter(|c| !spec.is_hidden(c))
+                .cloned()
+                .collect();
+            (name.clone(), visible)
+        })
+        .filter(|(_, members)| !members.is_empty())
+        .collect();
+
     Ok(BatteryPackDetail {
         short_name: short_name(&spec.name).to_string(),
         name: spec.name.clone(),
@@ -745,6 +761,7 @@ pub(crate) fn build_battery_pack_detail(
         owners: owners.into_iter().map(OwnerInfo::from).collect(),
         crates,
         extends,
+        features,
         templates,
         examples,
     })

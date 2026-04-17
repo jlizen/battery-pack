@@ -97,6 +97,7 @@ fn make_detail(crates: &[&str], templates: &[&str], examples: &[&str]) -> Batter
         owners: Vec::new(),
         crates: crates.iter().map(|s| s.to_string()).collect(),
         extends: Vec::new(),
+        features: std::collections::BTreeMap::new(),
         templates: templates
             .iter()
             .map(|name| crate::registry::TemplateInfo {
