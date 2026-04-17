@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use crate::manifest::{
     MetadataLocation, add_dep_to_table, dep_kind_section, find_installed_bp_names,
     find_user_manifest, find_workspace_manifest, read_active_features_from,
-    resolve_metadata_location, should_upgrade_version, sync_dep_in_table, write_bp_features_to_doc,
-    write_deps_by_kind, write_workspace_refs_by_kind,
+    read_managed_deps_from, resolve_metadata_location, should_upgrade_version,
+    sync_dep_in_table, write_bp_features_to_doc, write_deps_by_kind,
+    write_workspace_refs_by_kind,
 };
 use crate::registry::{
     CrateSource, InstalledPack, TemplateConfig, download_and_extract_crate,
@@ -592,6 +593,7 @@ pub(crate) fn add_battery_pack(
     // [impl manifest.features.storage]
     // [impl cli.add.target]
     // Record active features — location depends on --target flag
+    let managed_deps: BTreeSet<String> = crates_to_sync.keys().cloned().collect();
     let use_workspace_metadata = match target {
         Some(AddTarget::Workspace) => true,
         Some(AddTarget::Package) => false,
@@ -605,6 +607,7 @@ pub(crate) fn add_battery_pack(
                 &["workspace", "metadata"],
                 &crate_name,
                 &active_features,
+                Some(&managed_deps),
             );
         } else {
             bail!("--target=workspace requires a workspace, but none was found");
@@ -615,6 +618,7 @@ pub(crate) fn add_battery_pack(
             &["package", "metadata"],
             &crate_name,
             &active_features,
+            Some(&managed_deps),
         );
     }
 
@@ -685,6 +689,18 @@ fn sync_battery_packs(project_dir: &Path, path: Option<&str>, source: &CrateSour
         // [impl format.hidden.effect]
         let expected = bp_spec.resolve_for_features(&active_features);
 
+        // Compute managed-deps: migrate old-format or merge new crates
+        let existing_managed =
+            read_managed_deps_from(&metadata_location, &user_manifest_content, bp_name);
+        let expected_names: BTreeSet<String> = expected.keys().cloned().collect();
+        let managed_deps = match existing_managed {
+            None => expected_names, // migration: populate from resolved crates
+            Some(mut set) => {
+                set.extend(expected_names);
+                set
+            }
+        };
+
         // [impl manifest.deps.workspace]
         // Sync each crate
         if let Some(ref ws_path) = workspace_manifest {
@@ -705,6 +721,18 @@ fn sync_battery_packs(project_dir: &Path, path: Option<&str>, source: &CrateSour
                     }
                 }
             }
+
+            // Write managed-deps to workspace metadata if that's where it lives
+            if matches!(metadata_location, MetadataLocation::Workspace { .. }) {
+                write_bp_features_to_doc(
+                    &mut ws_doc,
+                    &["workspace", "metadata"],
+                    bp_name,
+                    &active_features,
+                    Some(&managed_deps),
+                );
+            }
+
             // [impl manifest.toml.preserve]
             std::fs::write(ws_path, ws_doc.to_string())
                 .context("Failed to write workspace Cargo.toml")?;
@@ -731,6 +759,17 @@ fn sync_battery_packs(project_dir: &Path, path: Option<&str>, source: &CrateSour
                     }
                 }
             }
+        }
+
+        // Write managed-deps to package metadata if that's where it lives
+        if matches!(metadata_location, MetadataLocation::Package) {
+            write_bp_features_to_doc(
+                &mut user_doc,
+                &["package", "metadata"],
+                bp_name,
+                &active_features,
+                Some(&managed_deps),
+            );
         }
     }
 
@@ -838,6 +877,7 @@ fn enable_feature(
                 &["workspace", "metadata"],
                 &bp_name,
                 &active_features,
+                None,
             );
         }
 
@@ -858,6 +898,7 @@ fn enable_feature(
             &["package", "metadata"],
             &bp_name,
             &active_features,
+            None,
         );
     }
 
