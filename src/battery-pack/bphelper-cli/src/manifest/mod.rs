@@ -172,6 +172,25 @@ pub(crate) fn add_dep_to_table(
     }
 }
 
+/// Remove dependencies from the correct sections by `dep_kind`.
+///
+/// Returns the number of crates actually removed.
+pub(crate) fn remove_deps_by_kind(
+    doc: &mut toml_edit::DocumentMut,
+    crates: &BTreeMap<String, bphelper_manifest::CrateSpec>,
+) -> usize {
+    let mut removed = 0;
+    for (dep_name, dep_spec) in crates {
+        let section = dep_kind_section(dep_spec.dep_kind);
+        if let Some(table) = doc.get_mut(section).and_then(|t| t.as_table_mut()) {
+            if table.remove(dep_name).is_some() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 /// Return true when `recommended` is strictly newer than `current` (semver).
 ///
 /// Falls back to string equality when either side is not a valid semver

@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use crate::manifest::{
     MetadataLocation, add_dep_to_table, dep_kind_section, find_installed_bp_names,
     find_user_manifest, find_workspace_manifest, read_active_features_from,
-    read_managed_deps_from, resolve_metadata_location, should_upgrade_version,
-    sync_dep_in_table, write_bp_features_to_doc, write_deps_by_kind,
+    read_managed_deps_from, remove_deps_by_kind, resolve_metadata_location,
+    should_upgrade_version, sync_dep_in_table, write_bp_features_to_doc, write_deps_by_kind,
     write_workspace_refs_by_kind,
 };
 use crate::registry::{
@@ -74,9 +74,11 @@ pub(crate) enum BpCommands {
 
     /// Add a battery pack and sync its dependencies.
     ///
-    /// Without arguments, opens an interactive TUI for managing all battery packs.
+    /// Without arguments, lists installed packs and suggests next steps.
     /// With a battery pack name, adds that specific pack (with an interactive picker
     /// for choosing crates if the pack has features or many dependencies).
+    /// Re-running on an already-installed pack lets you edit the selection.
+    #[command(visible_alias = "edit")]
     Add {
         /// Name of the battery pack (e.g., "cli" resolves to "cli-battery-pack").
         /// Omit to open the interactive manager.
@@ -463,7 +465,9 @@ pub(crate) fn add_battery_pack(
             crates,
         } => (active_features, crates),
         ResolvedAdd::Interactive if std::io::stdout().is_terminal() => {
-            match pick_crates_interactive(&bp_spec)? {
+            // Pre-select crates already in the project (edit mode)
+            let pre_selected = compute_pre_selection(&bp_spec, project_dir);
+            match pick_crates_interactive(&bp_spec, &pre_selected)? {
                 Some(result) => (result.active_features, result.crates),
                 None => {
                     println!("Cancelled.");
@@ -573,8 +577,39 @@ pub(crate) fn add_battery_pack(
     // [impl manifest.register.format]
     // [impl manifest.features.storage]
     // [impl cli.add.target]
+    // Edit semantics: remove deselected crates from previous installation
+    let metadata_location = resolve_metadata_location(&user_manifest_path)?;
+    let prev_managed = read_managed_deps_from(&metadata_location, &user_manifest_content, &crate_name);
+    let new_crate_names: BTreeSet<String> = crates_to_sync.keys().cloned().collect();
+    let mut removed_count = 0;
+
+    if let Some(prev) = &prev_managed {
+        // Find crates that were previously managed but are no longer selected
+        let to_remove: BTreeMap<String, bphelper_manifest::CrateSpec> = prev
+            .iter()
+            .filter(|name| !new_crate_names.contains(name.as_str()))
+            .filter_map(|name| {
+                bp_spec.crates.get(name).map(|spec| (name.clone(), spec.clone()))
+            })
+            .collect();
+
+        if !to_remove.is_empty() {
+            if let Some(ref mut doc) = ws_doc {
+                // Remove from workspace deps
+                let ws_deps = doc["workspace"]["dependencies"]
+                    .as_table_mut();
+                if let Some(ws_table) = ws_deps {
+                    for name in to_remove.keys() {
+                        ws_table.remove(name);
+                    }
+                }
+            }
+            removed_count = remove_deps_by_kind(&mut user_doc, &to_remove);
+        }
+    }
+
     // Record active features — location depends on --target flag
-    let managed_deps: BTreeSet<String> = crates_to_sync.keys().cloned().collect();
+    let managed_deps = new_crate_names;
     let use_workspace_metadata = match target {
         Some(AddTarget::Workspace) => true,
         Some(AddTarget::Package) => false,
@@ -628,6 +663,9 @@ pub(crate) fn add_battery_pack(
     );
     for dep_name in crates_to_sync.keys() {
         println!("  + {}", dep_name);
+    }
+    if removed_count > 0 {
+        println!("Removed {} deselected crate(s)", removed_count);
     }
 
     Ok(())
@@ -801,61 +839,132 @@ fn sync_battery_packs(project_dir: &Path, path: Option<&str>, source: &CrateSour
 // Interactive crate picker
 // ============================================================================
 
+/// Compute which crates from a battery pack are already present in the project.
+///
+/// Returns an empty set when the pack is not yet installed (fresh install),
+/// which causes the picker to fall back to the pack's default feature set.
+fn compute_pre_selection(
+    bp_spec: &bphelper_manifest::BatteryPackSpec,
+    project_dir: &Path,
+) -> BTreeSet<String> {
+    let Ok(manifest_path) = find_user_manifest(project_dir) else {
+        return BTreeSet::new();
+    };
+    let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+        return BTreeSet::new();
+    };
+    let Ok(versions) = collect_user_dep_versions(&manifest_path, &content) else {
+        return BTreeSet::new();
+    };
+
+    // A crate is pre-selected if it appears in the project's dependencies
+    bp_spec
+        .crates
+        .keys()
+        .filter(|name| versions.contains_key(name.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// Represents the result of an interactive crate selection.
-struct PickerResult {
+pub(crate) struct PickerResult {
     /// The resolved crates to install (name -> dep spec with merged features).
-    crates: BTreeMap<String, bphelper_manifest::CrateSpec>,
+    pub crates: BTreeMap<String, bphelper_manifest::CrateSpec>,
     /// Which feature names are fully selected (for metadata recording).
-    active_features: BTreeSet<String>,
+    pub active_features: BTreeSet<String>,
+}
+
+/// An item in the picker — either a feature or an individual crate.
+enum PickerItem {
+    Feature(String),       // feature name
+    Crate(String),         // crate name
 }
 
 /// Show an interactive multi-select picker for choosing which crates to install.
 ///
-/// Returns `None` if the user cancels. Returns `Some(PickerResult)` with the
-/// selected crates and which sets are fully active.
+/// Features are listed first, then individual crates. `pre_selected` contains
+/// crate names already present in the project (for edit mode); when empty,
+/// the pack's default feature set is used for initial selection.
+///
+/// Returns `None` if the user cancels.
 fn pick_crates_interactive(
     bp_spec: &bphelper_manifest::BatteryPackSpec,
+    pre_selected: &BTreeSet<String>,
 ) -> Result<Option<PickerResult>> {
     use console::style;
     use dialoguer::MultiSelect;
 
-    let grouped = bp_spec.all_crates_with_grouping();
-    if grouped.is_empty() {
+    // Collect non-default features with their member crates
+    let features: Vec<(&String, &BTreeSet<String>)> = bp_spec
+        .features
+        .iter()
+        .filter(|(name, _)| name.as_str() != "default")
+        .collect();
+
+    // Collect all visible crates
+    let visible_crates: Vec<(&String, &bphelper_manifest::CrateSpec)> = bp_spec
+        .crates
+        .iter()
+        .filter(|(name, _)| !bp_spec.is_hidden(name))
+        .collect();
+
+    if visible_crates.is_empty() {
         bail!("Battery pack has no crates to add");
     }
 
-    // Build display items and track which group each belongs to
-    let mut labels = Vec::new();
-    let mut defaults = Vec::new();
+    let use_defaults = pre_selected.is_empty();
+    let default_crates: BTreeSet<String> = if use_defaults {
+        bp_spec.resolve_crates(&["default"]).keys().cloned().collect()
+    } else {
+        BTreeSet::new()
+    };
 
-    for (group, crate_name, dep, is_default) in &grouped {
-        let version_info = if dep.features.is_empty() {
-            format!("({})", dep.version)
+    // Build picker items: features first, then crates
+    let mut items: Vec<PickerItem> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
+    let mut defaults: Vec<bool> = Vec::new();
+
+    for (feat_name, feat_crates) in &features {
+        let member_list = feat_crates
+            .iter()
+            .filter(|c| !bp_spec.is_hidden(c))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        labels.push(format!(
+            "✦ {} {}",
+            feat_name,
+            style(format!("[{}]", member_list)).dim()
+        ));
+        let checked = if use_defaults {
+            // Feature is checked if all its visible members are in defaults
+            feat_crates.iter().filter(|c| !bp_spec.is_hidden(c)).all(|c| default_crates.contains(c))
+        } else {
+            // Feature is checked if all its visible members are pre-selected
+            feat_crates.iter().filter(|c| !bp_spec.is_hidden(c)).all(|c| pre_selected.contains(c))
+        };
+        defaults.push(checked);
+        items.push(PickerItem::Feature(feat_name.to_string()));
+    }
+
+    for (crate_name, spec) in &visible_crates {
+        let version_info = if spec.features.is_empty() {
+            format!("({})", spec.version)
         } else {
             format!(
                 "({}, features: {})",
-                dep.version,
-                dep.features
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                spec.version,
+                spec.features.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
             )
         };
-
-        let group_label = if group == "default" {
-            String::new()
+        labels.push(format!("  {} {}", crate_name, style(&version_info).dim()));
+        let checked = if use_defaults {
+            default_crates.contains(crate_name.as_str())
         } else {
-            format!(" [{}]", group)
+            pre_selected.contains(crate_name.as_str())
         };
-
-        labels.push(format!(
-            "{} {}{}",
-            crate_name,
-            style(&version_info).dim(),
-            style(&group_label).cyan()
-        ));
-        defaults.push(*is_default);
+        defaults.push(checked);
+        items.push(PickerItem::Crate(crate_name.to_string()));
     }
 
     // Show the picker
@@ -868,36 +977,63 @@ fn pick_crates_interactive(
     println!();
 
     let selections = MultiSelect::new()
-        .with_prompt("Select crates to add")
+        .with_prompt("Select features and crates")
         .items(&labels)
         .defaults(&defaults)
         .interact_opt()
         .context("Failed to show crate picker")?;
 
     let Some(selected_indices) = selections else {
-        return Ok(None); // User cancelled
+        return Ok(None);
     };
 
-    // Build the result: resolve selected crates with proper feature merging
-    let mut crates = BTreeMap::new();
+    // Determine which features and crates are selected
+    let selected_set: BTreeSet<usize> = selected_indices.into_iter().collect();
+    let mut selected_crates: BTreeSet<String> = BTreeSet::new();
 
-    for idx in &selected_indices {
-        let (_group, crate_name, dep, _) = &grouped[*idx];
-        // Start with base dep spec
-        let merged = (*dep).clone();
-
-        crates.insert(crate_name.clone(), merged);
-    }
-
-    // Determine which features are "fully selected" for metadata
-    let mut active_features = BTreeSet::from(["default".to_string()]);
-    for (feature_name, feature_crates) in &bp_spec.features {
-        if feature_name == "default" {
+    for (i, item) in items.iter().enumerate() {
+        if !selected_set.contains(&i) {
             continue;
         }
-        let all_selected = feature_crates.iter().all(|c| crates.contains_key(c));
-        if all_selected {
-            active_features.insert(feature_name.clone());
+        match item {
+            PickerItem::Feature(feat_name) => {
+                if let Some(members) = bp_spec.features.get(feat_name) {
+                    for c in members {
+                        if !bp_spec.is_hidden(c) {
+                            selected_crates.insert(c.clone());
+                        }
+                    }
+                }
+            }
+            PickerItem::Crate(name) => {
+                selected_crates.insert(name.clone());
+            }
+        }
+    }
+
+    // Build the result
+    let mut crates = BTreeMap::new();
+    for name in &selected_crates {
+        if let Some(spec) = bp_spec.crates.get(name) {
+            crates.insert(name.clone(), spec.clone());
+        }
+    }
+
+    // Determine which features are fully selected
+    let mut active_features = BTreeSet::new();
+    // Check if all default crates are selected
+    let default_members = bp_spec.features.get("default");
+    if default_members.is_some_and(|members| {
+        members.iter().filter(|c| !bp_spec.is_hidden(c)).all(|c| selected_crates.contains(c))
+    }) {
+        active_features.insert("default".to_string());
+    }
+    for (feat_name, feat_crates) in &bp_spec.features {
+        if feat_name == "default" {
+            continue;
+        }
+        if feat_crates.iter().filter(|c| !bp_spec.is_hidden(c)).all(|c| selected_crates.contains(c)) {
+            active_features.insert(feat_name.clone());
         }
     }
 
