@@ -25,7 +25,7 @@ multiple local workspaces.
 r[cli.source.subcommands]
 The `--crate-source` flag MUST be accepted by all subcommands that
 resolve battery packs: `add`, `new`, `show`, `list`, `status`,
-and `sync`, as well as the bare `cargo bp` TUI.
+and `sync`.
 
 r[cli.source.scope]
 The `--crate-source` flag is a per-invocation option that
@@ -63,8 +63,9 @@ it MUST be used as-is without further modification.
 ## `cargo bp` (no arguments)
 
 r[cli.bare.tui]
-Running `cargo bp` with no subcommand and no flags MUST launch
-the interactive TUI.
+Running `cargo bp` with no subcommand and no flags MUST print
+the available subcommands and exit. This is the default clap
+behavior when a required subcommand is missing.
 
 r[cli.bare.help]
 Running `cargo bp --help` MUST print CLI help text and exit.
