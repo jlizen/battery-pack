@@ -42,7 +42,7 @@ pub(crate) enum Commands {
         crate_source: Option<PathBuf>,
 
         #[command(subcommand)]
-        command: Option<BpCommands>,
+        command: BpCommands,
     },
 }
 
@@ -196,16 +196,6 @@ pub fn main() -> Result<()> {
             let source = match crate_source {
                 Some(path) => CrateSource::Local(path),
                 None => CrateSource::Registry,
-            };
-            // [impl cli.bare.tui]
-            let Some(command) = command else {
-                if interactive {
-                    return crate::tui::run_add(source);
-                } else {
-                    bail!(
-                        "No subcommand specified. Use `cargo bp --help` or run interactively in a terminal."
-                    );
-                }
             };
             match command {
                 BpCommands::New {

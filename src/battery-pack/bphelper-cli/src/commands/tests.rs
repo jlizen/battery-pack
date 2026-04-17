@@ -19,26 +19,26 @@ use clap::Parser;
 use snapbox::{assert_data_eq, file};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Unwrap `Commands::Bp { command }` → `Option<BpCommands>`.
-fn unwrap_bp_command(cli: super::Cli) -> Option<super::BpCommands> {
+/// Unwrap `Commands::Bp { command }` → `BpCommands`.
+fn unwrap_bp_command(cli: super::Cli) -> super::BpCommands {
     match cli.command {
         super::Commands::Bp { command, .. } => command,
     }
 }
 
 // ============================================================================
-// cli.bare.tui — bare `cargo bp` produces command: None (→ TUI or bail)
+// cli.bare.tui — bare `cargo bp` requires a subcommand (prints usage)
 // ============================================================================
 
 // [verify cli.bare.tui]
 #[test]
-fn bare_cargo_bp_produces_none_command() {
-    // `cargo bp` with no subcommand should parse successfully with command = None.
-    // At runtime, main() uses this to launch the TUI (if terminal) or bail.
-    let cli = super::Cli::try_parse_from(["cargo", "bp"]).expect("bare `cargo bp` should parse");
+fn bare_cargo_bp_is_parse_error() {
+    // `cargo bp` with no subcommand should fail to parse because
+    // a subcommand is now required. Clap prints available subcommands.
+    let result = super::Cli::try_parse_from(["cargo", "bp"]);
     assert!(
-        unwrap_bp_command(cli).is_none(),
-        "bare `cargo bp` should produce command: None"
+        result.is_err(),
+        "bare `cargo bp` should be a parse error (subcommand required)"
     );
 }
 
@@ -55,11 +55,10 @@ fn new_name_flag_is_parsed() {
         .expect("--name flag should be accepted");
 
     match unwrap_bp_command(cli) {
-        Some(super::BpCommands::New { name, .. }) => {
+        super::BpCommands::New { name, .. } => {
             assert_eq!(name.as_deref(), Some("my-project"));
         }
-        None => panic!("expected Some(New), got None"),
-        Some(other) => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
+        other => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
@@ -71,11 +70,10 @@ fn new_name_short_flag_is_parsed() {
         .expect("-n flag should be accepted");
 
     match unwrap_bp_command(cli) {
-        Some(super::BpCommands::New { name, .. }) => {
+        super::BpCommands::New { name, .. } => {
             assert_eq!(name.as_deref(), Some("my-project"));
         }
-        None => panic!("expected Some(New), got None"),
-        Some(other) => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
+        other => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
@@ -92,11 +90,10 @@ fn new_without_name_parses_as_none() {
         .expect("new without --name should parse");
 
     match unwrap_bp_command(cli) {
-        Some(super::BpCommands::New { name, .. }) => {
+        super::BpCommands::New { name, .. } => {
             assert!(name.is_none(), "name should be None when --name is omitted");
         }
-        None => panic!("expected Some(New), got None"),
-        Some(other) => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
+        other => panic!("expected New, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
@@ -328,13 +325,12 @@ fn show_non_interactive_flag_is_parsed() {
         .expect("--non-interactive should be accepted");
 
     match unwrap_bp_command(cli) {
-        Some(super::BpCommands::Show {
+        super::BpCommands::Show {
             non_interactive, ..
-        }) => {
+        } => {
             assert!(non_interactive, "non_interactive should be true");
         }
-        None => panic!("expected Some(Show), got None"),
-        Some(other) => panic!("expected Show, got {:?}", std::mem::discriminant(&other)),
+        other => panic!("expected Show, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
@@ -345,13 +341,12 @@ fn show_defaults_to_interactive() {
         .expect("show without --non-interactive should parse");
 
     match unwrap_bp_command(cli) {
-        Some(super::BpCommands::Show {
+        super::BpCommands::Show {
             non_interactive, ..
-        }) => {
+        } => {
             assert!(!non_interactive, "non_interactive should default to false");
         }
-        None => panic!("expected Some(Show), got None"),
-        Some(other) => panic!("expected Show, got {:?}", std::mem::discriminant(&other)),
+        other => panic!("expected Show, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
@@ -362,13 +357,12 @@ fn list_non_interactive_flag_is_parsed() {
         .expect("--non-interactive should be accepted");
 
     match unwrap_bp_command(cli) {
-        Some(super::BpCommands::List {
+        super::BpCommands::List {
             non_interactive, ..
-        }) => {
+        } => {
             assert!(non_interactive, "non_interactive should be true");
         }
-        None => panic!("expected Some(List), got None"),
-        Some(other) => panic!("expected List, got {:?}", std::mem::discriminant(&other)),
+        other => panic!("expected List, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
@@ -379,13 +373,12 @@ fn list_defaults_to_interactive() {
         .expect("list without --non-interactive should parse");
 
     match unwrap_bp_command(cli) {
-        Some(super::BpCommands::List {
+        super::BpCommands::List {
             non_interactive, ..
-        }) => {
+        } => {
             assert!(!non_interactive, "non_interactive should default to false");
         }
-        None => panic!("expected Some(List), got None"),
-        Some(other) => panic!("expected List, got {:?}", std::mem::discriminant(&other)),
+        other => panic!("expected List, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
@@ -458,7 +451,7 @@ fn parse_add_command(args: &[&str]) -> ParsedAdd {
     let cli = super::Cli::try_parse_from(args)
         .unwrap_or_else(|e| panic!("parse failed for {args:?}: {e}"));
     match unwrap_bp_command(cli) {
-        Some(super::BpCommands::Add {
+        super::BpCommands::Add {
             battery_pack,
             crates,
             features,
@@ -466,7 +459,7 @@ fn parse_add_command(args: &[&str]) -> ParsedAdd {
             all_features,
             target,
             path,
-        }) => ParsedAdd {
+        } => ParsedAdd {
             _battery_pack: battery_pack,
             crates,
             features,
@@ -475,8 +468,7 @@ fn parse_add_command(args: &[&str]) -> ParsedAdd {
             target,
             _path: path,
         },
-        None => panic!("expected Some(Add), got None"),
-        Some(other) => panic!("expected Add, got {:?}", std::mem::discriminant(&other)),
+        other => panic!("expected Add, got {:?}", std::mem::discriminant(&other)),
     }
 }
 
