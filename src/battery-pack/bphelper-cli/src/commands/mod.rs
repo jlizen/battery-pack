@@ -273,7 +273,7 @@ pub fn main() -> Result<()> {
                     if !non_interactive && interactive {
                         crate::tui::run_show(&battery_pack, path.as_deref(), source)
                     } else {
-                        print_battery_pack_detail(&battery_pack, path.as_deref(), &source)
+                        print_battery_pack_detail(&battery_pack, path.as_deref(), &source, &project_dir)
                     }
                 }
                 BpCommands::Status { path } => {
@@ -1587,7 +1587,26 @@ fn print_battery_pack_list(source: &CrateSource, filter: Option<&str>) -> Result
     Ok(())
 }
 
-fn print_battery_pack_detail(name: &str, path: Option<&str>, source: &CrateSource) -> Result<()> {
+/// Read installed state (managed-deps and active features) for a battery pack.
+/// Returns empty sets if not in a project or pack not installed.
+fn read_installed_state(project_dir: &Path, crate_name: &str) -> (BTreeSet<String>, BTreeSet<String>) {
+    let empty = (BTreeSet::new(), BTreeSet::new());
+    let Ok(manifest_path) = find_user_manifest(project_dir) else {
+        return empty;
+    };
+    let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+        return empty;
+    };
+    let Ok(location) = resolve_metadata_location(&manifest_path) else {
+        return empty;
+    };
+    let managed = read_managed_deps_from(&location, &content, crate_name)
+        .unwrap_or_default();
+    let features = read_active_features_from(&location, &content, crate_name);
+    (managed, features)
+}
+
+fn print_battery_pack_detail(name: &str, path: Option<&str>, source: &CrateSource, project_dir: &Path) -> Result<()> {
     use console::style;
 
     // --path takes precedence over --crate-source
@@ -1596,6 +1615,10 @@ fn print_battery_pack_detail(name: &str, path: Option<&str>, source: &CrateSourc
     } else {
         fetch_battery_pack_detail_from_source(source, name)?
     };
+
+    // Read installed state from the project (if available)
+    let crate_name = resolve_crate_name(name);
+    let (managed_deps, active_features) = read_installed_state(project_dir, &crate_name);
 
     // Header
     println!();
@@ -1626,7 +1649,12 @@ fn print_battery_pack_detail(name: &str, path: Option<&str>, source: &CrateSourc
         println!();
         println!("{}", style("Crates:").bold());
         for dep in &detail.crates {
-            println!("  {}", dep);
+            let marker = if managed_deps.contains(dep) {
+                format!(" {}", style("✓").green())
+            } else {
+                String::new()
+            };
+            println!("  {}{}", dep, marker);
         }
     }
 
@@ -1635,7 +1663,12 @@ fn print_battery_pack_detail(name: &str, path: Option<&str>, source: &CrateSourc
         println!();
         println!("{}", style("Features:").bold());
         for (feat_name, members) in &detail.features {
-            println!("  {} → {}", style(feat_name).cyan(), members.join(", "));
+            let marker = if active_features.contains(feat_name) {
+                format!(" {}", style("✓").green())
+            } else {
+                String::new()
+            };
+            println!("  {} → {}{}", style(feat_name).cyan(), members.join(", "), marker);
         }
     }
 
