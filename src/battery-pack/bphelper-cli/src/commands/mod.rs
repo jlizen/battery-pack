@@ -216,12 +216,7 @@ pub fn main() -> Result<()> {
                         &source,
                         &project_dir,
                     ),
-                    None if interactive => crate::tui::run_add(source),
-                    None => {
-                        bail!(
-                            "No battery pack specified. Use `cargo bp add <name>` or run interactively in a terminal."
-                        )
-                    }
+                    None => show_add_help(&project_dir),
                 },
                 BpCommands::Sync { path } => {
                     sync_battery_packs(&project_dir, path.as_deref(), &source)
@@ -634,6 +629,36 @@ pub(crate) fn add_battery_pack(
     for dep_name in crates_to_sync.keys() {
         println!("  + {}", dep_name);
     }
+
+    Ok(())
+}
+
+/// Show a helpful message when `cargo bp add` is run without arguments.
+fn show_add_help(project_dir: &Path) -> Result<()> {
+    let manifest_path = find_user_manifest(project_dir);
+    let installed = manifest_path.ok().and_then(|p| {
+        let content = std::fs::read_to_string(&p).ok()?;
+        find_installed_bp_names(&content).ok()
+    });
+
+    match installed.as_deref() {
+        Some(names) if !names.is_empty() => {
+            println!("Installed battery packs:");
+            for name in names {
+                println!("  {}", short_name(name));
+            }
+            println!();
+            println!("To add crates or features, run:");
+            println!("  cargo bp add <name>");
+        }
+        _ => {
+            println!("No battery packs installed.");
+        }
+    }
+
+    println!();
+    println!("To discover and install new packs, run:");
+    println!("  cargo bp ls");
 
     Ok(())
 }
