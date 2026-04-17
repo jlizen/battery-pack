@@ -445,6 +445,12 @@ pub(crate) fn read_active_features_from(
 ///
 /// `path_prefix` is `["package", "metadata"]` for package metadata or
 /// `["workspace", "metadata"]` for workspace metadata.
+///
+/// Writes as a regular TOML table:
+/// ```toml
+/// [package.metadata.battery-pack.cli-battery-pack]
+/// features = ["default", "indicators"]
+/// ```
 pub(crate) fn write_bp_features_to_doc(
     doc: &mut toml_edit::DocumentMut,
     path_prefix: &[&str],
@@ -461,16 +467,19 @@ pub(crate) fn write_bp_features_to_doc(
     doc[path_prefix[0]][path_prefix[1]]["battery-pack"]
         .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
 
-    // Write as inline table: `bp_name = { features = [...] }`
-    let mut inline = toml_edit::InlineTable::new();
-    inline.insert("features", toml_edit::Value::Array(features_array));
+    // Write as a regular sub-table: `[prefix.battery-pack.bp_name]\nfeatures = [...]`
     let bp_table = doc[path_prefix[0]][path_prefix[1]]["battery-pack"]
         .as_table_mut()
         .expect("battery-pack table must exist");
-    bp_table.insert(
-        bp_name,
-        toml_edit::Item::Value(toml_edit::Value::InlineTable(inline)),
+
+    let mut entry_table = toml_edit::Table::new();
+    entry_table.insert(
+        "features",
+        toml_edit::Item::Value(toml_edit::Value::Array(features_array)),
     );
+    // Use dotted keys so it renders as [prefix.battery-pack.bp_name]
+    entry_table.set_implicit(true);
+    bp_table.insert(bp_name, toml_edit::Item::Table(entry_table));
 }
 
 /// Resolve the manifest path for a battery pack using `cargo metadata`.
