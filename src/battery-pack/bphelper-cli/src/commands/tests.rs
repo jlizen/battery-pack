@@ -122,7 +122,7 @@ fn resolve_template_single_template_uses_it() {
         },
     );
 
-    let result = super::resolve_template(&templates, None, false).unwrap();
+    let result = super::resolve_template(&templates, None, true).unwrap();
     assert_eq!(result, "templates/simple");
 }
 
@@ -146,7 +146,7 @@ fn resolve_template_picks_default_when_present() {
         },
     );
 
-    let result = super::resolve_template(&templates, None, false).unwrap();
+    let result = super::resolve_template(&templates, None, true).unwrap();
     assert_eq!(result, "templates/default");
 }
 
@@ -171,7 +171,7 @@ fn resolve_template_unknown_name_errors() {
         },
     );
 
-    let result = super::resolve_template(&templates, Some("nonexistent"), false);
+    let result = super::resolve_template(&templates, Some("nonexistent"), true);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
@@ -204,7 +204,7 @@ fn resolve_template_explicit_flag_overrides() {
         },
     );
 
-    let result = super::resolve_template(&templates, Some("advanced"), false).unwrap();
+    let result = super::resolve_template(&templates, Some("advanced"), true).unwrap();
     assert_eq!(result, "templates/advanced");
 }
 
@@ -412,15 +412,16 @@ fn new_non_interactive_flag_is_parsed() {
 // cargo bp new without --name in non-interactive mode
 #[test]
 fn new_non_interactive_requires_name() {
-    let result = super::new_from_battery_pack(
-        "cli",
-        None,
-        None,
-        None,
-        &crate::registry::CrateSource::Registry,
-        &[],
-        true,
-    );
+    let source = crate::registry::CrateSource::Registry;
+    let result = super::new_from_battery_pack(super::NewFromBpOpts {
+        battery_pack: "cli",
+        name: None,
+        template: None,
+        path_override: None,
+        source: &source,
+        define: &[],
+        interactive: false,
+    });
     let err = result.unwrap_err();
     assert!(
         err.to_string().contains("--name is required"),

@@ -201,8 +201,7 @@ pub fn main() -> Result<()> {
                 Some(path) => CrateSource::Local(path),
                 None => CrateSource::Registry,
             };
-            let non_interactive = non_interactive || !interactive;
-            let interactive = !non_interactive;
+            let interactive = interactive && !non_interactive;
             match command {
                 BpCommands::New {
                     battery_pack,
@@ -210,15 +209,15 @@ pub fn main() -> Result<()> {
                     template,
                     path,
                     define,
-                } => new_from_battery_pack(
-                    &battery_pack,
+                } => new_from_battery_pack(NewFromBpOpts {
+                    battery_pack: &battery_pack,
                     name,
                     template,
-                    path,
-                    &source,
-                    &define,
-                    non_interactive,
-                ),
+                    path_override: path,
+                    source: &source,
+                    define: &define,
+                    interactive,
+                }),
                 BpCommands::Add {
                     battery_pack,
                     crates,
@@ -258,7 +257,7 @@ pub fn main() -> Result<()> {
                 BpCommands::List { filter } => {
                     // [impl cli.list.interactive]
                     // [impl cli.list.non-interactive]
-                    if !non_interactive {
+                    if interactive {
                         crate::tui::run_list(source, filter)
                     } else {
                         // [impl cli.list.query]
@@ -269,7 +268,7 @@ pub fn main() -> Result<()> {
                 BpCommands::Show { battery_pack, path } => {
                     // [impl cli.show.interactive]
                     // [impl cli.show.non-interactive]
-                    if !non_interactive {
+                    if interactive {
                         crate::tui::run_show(&battery_pack, path.as_deref(), source)
                     } else {
                         print_battery_pack_detail(
@@ -295,42 +294,45 @@ pub fn main() -> Result<()> {
 // Implementation
 // ============================================================================
 
+/// Input options for [`new_from_battery_pack`].
+pub(crate) struct NewFromBpOpts<'a> {
+    pub battery_pack: &'a str,
+    pub name: Option<String>,
+    pub template: Option<String>,
+    pub path_override: Option<String>,
+    pub source: &'a CrateSource,
+    pub define: &'a [(String, String)],
+    pub interactive: bool,
+}
+
 // [impl cli.new.template]
 // [impl cli.new.name-flag]
 // [impl cli.new.name-prompt]
 // [impl cli.path.flag]
 // [impl cli.source.replace]
-fn new_from_battery_pack(
-    battery_pack: &str,
-    name: Option<String>,
-    template: Option<String>,
-    path_override: Option<String>,
-    source: &CrateSource,
-    define: &[(String, String)],
-    non_interactive: bool,
-) -> Result<()> {
-    if non_interactive && name.is_none() {
+fn new_from_battery_pack(opts: NewFromBpOpts<'_>) -> Result<()> {
+    if !opts.interactive && opts.name.is_none() {
         bail!("--name is required in non-interactive mode");
     }
 
     let new_opts = NewOpts {
-        battery_pack: battery_pack.to_string(),
-        name,
-        defines: define.iter().cloned().collect(),
-        non_interactive,
+        battery_pack: opts.battery_pack.to_string(),
+        name: opts.name,
+        defines: opts.define.iter().cloned().collect(),
+        interactive: opts.interactive,
     };
 
     // --path takes precedence over --crate-source
-    if let Some(path) = path_override {
-        return generate_from_local(new_opts, &path, template);
+    if let Some(path) = opts.path_override {
+        return generate_from_local(new_opts, &path, opts.template);
     }
 
-    let crate_name = resolve_crate_name(battery_pack);
+    let crate_name = resolve_crate_name(opts.battery_pack);
 
     // Locate the crate directory based on source
     let crate_dir: PathBuf;
     let _temp_dir: Option<tempfile::TempDir>; // keep alive for Registry
-    match source {
+    match opts.source {
         CrateSource::Registry => {
             let crate_info = lookup_crate(&crate_name)?;
             let temp = download_and_extract_crate(&crate_name, &crate_info.version)?;
@@ -352,7 +354,7 @@ fn new_from_battery_pack(
     let templates = parse_template_metadata(&manifest_content, &crate_name)?;
 
     // Resolve which template to use
-    let template_path = resolve_template(&templates, template.as_deref(), non_interactive)?;
+    let template_path = resolve_template(&templates, opts.template.as_deref(), opts.interactive)?;
 
     // Generate the project from the crate directory
     generate_from_path(new_opts, &crate_dir, &template_path)
@@ -1399,7 +1401,7 @@ struct NewOpts {
     battery_pack: String,
     name: Option<String>,
     defines: BTreeMap<String, String>,
-    non_interactive: bool,
+    interactive: bool,
 }
 
 fn generate_from_local(opts: NewOpts, local_path: &str, template: Option<String>) -> Result<()> {
@@ -1415,7 +1417,7 @@ fn generate_from_local(opts: NewOpts, local_path: &str, template: Option<String>
         .and_then(|s| s.to_str())
         .unwrap_or("unknown");
     let templates = parse_template_metadata(&manifest_content, crate_name)?;
-    let template_path = resolve_template(&templates, template.as_deref(), opts.non_interactive)?;
+    let template_path = resolve_template(&templates, template.as_deref(), opts.interactive)?;
 
     generate_from_path(opts, local_path, &template_path)
 }
@@ -1450,10 +1452,10 @@ fn generate_from_path(opts: NewOpts, crate_path: &Path, template_path: &str) -> 
         raw
     };
 
-    let interactive_override = if opts.non_interactive {
-        Some(false)
-    } else {
+    let interactive_override = if opts.interactive {
         None
+    } else {
+        Some(false)
     };
 
     let gen_opts = crate::template_engine::GenerateOpts {
@@ -1503,7 +1505,7 @@ fn parse_template_metadata(
 pub(crate) fn resolve_template(
     templates: &BTreeMap<String, TemplateConfig>,
     requested: Option<&str>,
-    non_interactive: bool,
+    interactive: bool,
 ) -> Result<String> {
     match requested {
         Some(name) => {
@@ -1524,7 +1526,7 @@ pub(crate) fn resolve_template(
             } else if let Some(config) = templates.get("default") {
                 Ok(config.path.clone())
             } else {
-                prompt_for_template(templates, non_interactive)
+                prompt_for_template(templates, interactive)
             }
         }
     }
@@ -1532,7 +1534,7 @@ pub(crate) fn resolve_template(
 
 fn prompt_for_template(
     templates: &BTreeMap<String, TemplateConfig>,
-    non_interactive: bool,
+    interactive: bool,
 ) -> Result<String> {
     use dialoguer::{Select, theme::ColorfulTheme};
 
@@ -1549,7 +1551,7 @@ fn prompt_for_template(
         .collect();
 
     // Check if we're in a TTY for interactive mode
-    if non_interactive || !std::io::stdout().is_terminal() {
+    if !interactive || !std::io::stdout().is_terminal() {
         // Non-interactive: list templates and bail
         println!("Available templates:");
         for item in &items {
