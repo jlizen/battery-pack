@@ -800,61 +800,61 @@ fn remove_battery_pack(
 
     // Remove managed deps if confirmed
     if should_remove_deps && let Some(ref managed) = managed_deps {
-            let safe = deps_safe_to_remove(
-                managed,
-                &bp_names,
-                &crate_name,
-                &metadata_location,
-                &user_manifest_content,
-            );
+        let safe = deps_safe_to_remove(
+            managed,
+            &bp_names,
+            &crate_name,
+            &metadata_location,
+            &user_manifest_content,
+        );
 
-            // Remove from user doc (all dep sections)
-            for section in ["dependencies", "dev-dependencies"] {
-                if let Some(table) = user_doc.get_mut(section).and_then(|t| t.as_table_mut()) {
-                    for dep in &safe {
-                        table.remove(dep.as_str());
-                    }
+        // Remove from user doc (all dep sections)
+        for section in ["dependencies", "dev-dependencies"] {
+            if let Some(table) = user_doc.get_mut(section).and_then(|t| t.as_table_mut()) {
+                for dep in &safe {
+                    table.remove(dep.as_str());
                 }
             }
+        }
 
-            // Remove from workspace deps
-            if let Some(ref ws_path) = workspace_manifest {
-                let ws_content = std::fs::read_to_string(ws_path)
-                    .context("Failed to read workspace Cargo.toml")?;
-                let mut ws_doc: toml_edit::DocumentMut = ws_content
-                    .parse()
-                    .context("Failed to parse workspace Cargo.toml")?;
+        // Remove from workspace deps
+        if let Some(ref ws_path) = workspace_manifest {
+            let ws_content =
+                std::fs::read_to_string(ws_path).context("Failed to read workspace Cargo.toml")?;
+            let mut ws_doc: toml_edit::DocumentMut = ws_content
+                .parse()
+                .context("Failed to parse workspace Cargo.toml")?;
 
-                if let Some(ws_table) = ws_doc
+            if let Some(ws_table) = ws_doc
+                .get_mut("workspace")
+                .and_then(|w| w.get_mut("dependencies"))
+                .and_then(|d| d.as_table_mut())
+            {
+                for dep in &safe {
+                    ws_table.remove(dep.as_str());
+                }
+                // Also remove the battery pack itself from workspace deps
+                ws_table.remove(&crate_name);
+            }
+
+            // Remove metadata from workspace if that's where it lives
+            if matches!(metadata_location, MetadataLocation::Workspace { .. })
+                && let Some(bp_table) = ws_doc
                     .get_mut("workspace")
-                    .and_then(|w| w.get_mut("dependencies"))
-                    .and_then(|d| d.as_table_mut())
-                {
-                    for dep in &safe {
-                        ws_table.remove(dep.as_str());
-                    }
-                    // Also remove the battery pack itself from workspace deps
-                    ws_table.remove(&crate_name);
-                }
-
-                // Remove metadata from workspace if that's where it lives
-                if matches!(metadata_location, MetadataLocation::Workspace { .. })
-                    && let Some(bp_table) = ws_doc
-                        .get_mut("workspace")
-                        .and_then(|w| w.get_mut("metadata"))
-                        .and_then(|m| m.get_mut("battery-pack"))
-                        .and_then(|bp| bp.as_table_mut())
-                {
-                    bp_table.remove(&crate_name);
-                }
-
-                std::fs::write(ws_path, ws_doc.to_string())
-                    .context("Failed to write workspace Cargo.toml")?;
+                    .and_then(|w| w.get_mut("metadata"))
+                    .and_then(|m| m.get_mut("battery-pack"))
+                    .and_then(|bp| bp.as_table_mut())
+            {
+                bp_table.remove(&crate_name);
             }
 
-            if !safe.is_empty() {
-                println!("Removed {} dependency(ies)", safe.len());
-            }
+            std::fs::write(ws_path, ws_doc.to_string())
+                .context("Failed to write workspace Cargo.toml")?;
+        }
+
+        if !safe.is_empty() {
+            println!("Removed {} dependency(ies)", safe.len());
+        }
     }
 
     // Remove metadata from package if that's where it lives
