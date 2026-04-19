@@ -16,7 +16,7 @@
 //   - cli.add.idempotent     — re-adding same dep doesn't create duplicates
 
 use clap::Parser;
-use snapbox::{assert_data_eq, file, str};
+use snapbox::{assert_data_eq, str};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Unwrap `Commands::Bp { command }` → `BpCommands`.
@@ -1137,7 +1137,21 @@ fn add_default_crates_basic() {
     let content = read_cargo_toml(&tmp);
     let deps = extract_section(&content, "[dependencies]");
 
-    assert_data_eq!(deps, file![_]);
+    assert!(deps.contains("anyhow"), "Expected anyhow in default crates");
+    assert!(
+        deps.contains("thiserror"),
+        "Expected thiserror in default crates"
+    );
+    assert!(!deps.contains("eyre"), "eyre is optional, not in default");
+    assert_data_eq!(
+        deps,
+        str![[r#"
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+
+"#]]
+    );
 }
 
 #[test]
@@ -1157,6 +1171,14 @@ fn add_default_includes_dev_and_build_deps() {
     let dev_deps = extract_section(&content, "[dev-dependencies]");
     let build_deps = extract_section(&content, "[build-dependencies]");
 
+    assert!(
+        dev_deps.contains("insta"),
+        "dev-dep should be included with default features"
+    );
+    assert!(
+        build_deps.contains("cc"),
+        "build-dep should be included with default features"
+    );
     assert_data_eq!(
         dev_deps,
         str![[r#"
@@ -1197,7 +1219,19 @@ fn add_with_named_feature_writes_deps() {
     let content = read_cargo_toml(&tmp);
     let deps = extract_section(&content, "[dependencies]");
 
-    assert_data_eq!(deps, file![_]);
+    assert!(deps.contains("clap"), "Expected clap");
+    assert!(deps.contains("indicatif"), "Expected indicatif");
+    assert_data_eq!(
+        deps,
+        str![[r#"
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+console = "0.15"
+dialoguer = "0.11"
+indicatif = "0.17"
+
+"#]]
+    );
 }
 
 // [verify cli.add.features]
@@ -1217,7 +1251,30 @@ fn add_with_named_feature_records_metadata() {
     let content = read_cargo_toml(&tmp);
     let meta = extract_metadata(&content, "fancy-battery-pack");
 
-    assert_data_eq!(meta, file![_])
+    assert!(
+        meta.contains("fancy-battery-pack"),
+        "Expected battery pack name in metadata"
+    );
+    assert!(meta.contains("indicators"), "Expected indicators feature");
+    assert_data_eq!(
+        meta,
+        str![[r#"
+[package.metadata.battery-pack.fancy-battery-pack]
+features = [
+    "default",
+    "indicators",
+]
+managed-deps = [
+    "assert_cmd",
+    "clap",
+    "console",
+    "dialoguer",
+    "indicatif",
+    "predicates",
+]
+
+"#]]
+    )
 }
 
 // ============================================================================
@@ -1241,7 +1298,18 @@ fn add_no_default_features_with_feature() {
     let content = read_cargo_toml(&tmp);
     let deps = extract_section(&content, "[dependencies]");
 
-    assert_data_eq!(deps, file![_]);
+    assert!(deps.contains("console"), "Expected console dependency");
+    assert!(deps.contains("indicatif"), "Expected indicatif dependency");
+    assert!(!deps.contains("clap"), "default crate should be excluded");
+    assert_data_eq!(
+        deps,
+        str![[r#"
+[dependencies]
+console = "0.15"
+indicatif = "0.17"
+
+"#]]
+    );
 }
 
 // [verify cli.add.no-default-features]
@@ -1285,7 +1353,19 @@ fn add_all_features_basic() {
     let content = read_cargo_toml(&tmp);
     let deps = extract_section(&content, "[dependencies]");
 
-    assert_data_eq!(deps, file![_]);
+    assert!(deps.contains("anyhow"), "Expected anyhow dependency");
+    assert!(deps.contains("eyre"), "Expected eyre dependency");
+    assert!(deps.contains("thiserror"), "Expected thiserror dependency");
+    assert_data_eq!(
+        deps,
+        str![[r#"
+[dependencies]
+anyhow = "1"
+eyre = "0.6"
+thiserror = "2"
+
+"#]]
+    );
 }
 
 // [verify cli.add.all-features]
@@ -1305,7 +1385,25 @@ fn add_all_features_records_metadata() {
     let content = read_cargo_toml(&tmp);
     let meta = extract_metadata(&content, "basic-battery-pack");
 
-    assert_data_eq!(meta, file![_]);
+    assert!(
+        meta.contains("basic-battery-pack"),
+        "Expected battery pack name in metadata"
+    );
+    assert!(meta.contains("features"), "Expected features key");
+    assert!(meta.contains("all"), "Expected all feature");
+    assert_data_eq!(
+        meta,
+        str![[r#"
+[package.metadata.battery-pack.basic-battery-pack]
+features = ["all"]
+managed-deps = [
+    "anyhow",
+    "eyre",
+    "thiserror",
+]
+
+"#]]
+    );
 }
 
 // [verify cli.add.all-features]
@@ -1329,11 +1427,41 @@ fn add_all_features_fancy() {
 
     // Normal deps in [dependencies] — hidden crates (serde*, cc) filtered out
     // [verify format.hidden.effect]
-    assert_data_eq!(deps, file![_]);
+    assert!(deps.contains("clap"), "Expected clap dependency");
+    assert!(deps.contains("indicatif"), "Expected indicatif dependency");
+    assert!(!deps.contains("serde"), "serde is hidden");
+    assert_data_eq!(
+        deps,
+        str![[r#"
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+console = "0.15"
+dialoguer = "0.11"
+indicatif = "0.17"
+
+"#]]
+    );
 
     // Dev-deps land in [dev-dependencies]
     // [verify cli.add.dep-kind]
-    assert_data_eq!(dev_deps, file![_]);
+    assert!(
+        dev_deps.contains("assert_cmd"),
+        "Expected assert_cmd in dev-dependencies"
+    );
+    assert!(
+        dev_deps.contains("predicates"),
+        "Expected predicates in dev-dependencies"
+    );
+    assert_data_eq!(
+        dev_deps,
+        str![[r#"
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.0"
+
+
+"#]]
+    );
 
     // Build-deps: battery pack no longer added (validate() was removed)
     // [verify format.hidden.effect]
@@ -1361,7 +1489,15 @@ fn add_specific_crates_writes_only_named() {
     let content = read_cargo_toml(&tmp);
     let deps = extract_section(&content, "[dependencies]");
 
-    assert_data_eq!(deps, file![_]);
+    assert!(deps.contains("clap"), "Expected clap dependency");
+    assert_data_eq!(
+        deps,
+        str![[r#"
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+
+"#]]
+    );
 }
 
 // ============================================================================
@@ -1385,7 +1521,19 @@ fn add_unknown_crate_writes_valid_ones() {
     let content = read_cargo_toml(&tmp);
     let deps = extract_section(&content, "[dependencies]");
 
-    assert_data_eq!(deps, file![_]);
+    assert!(deps.contains("clap"), "Expected clap dependency");
+    assert!(
+        !deps.contains("nonexistent"),
+        "Expected nonexistent to not be in deps"
+    );
+    assert_data_eq!(
+        deps,
+        str![[r#"
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+
+"#]]
+    );
 }
 
 // ============================================================================
@@ -1409,7 +1557,24 @@ fn add_target_package_writes_metadata() {
     let content = read_cargo_toml(&tmp);
     let meta = extract_metadata(&content, "basic-battery-pack");
 
-    assert_data_eq!(meta, file![_]);
+    assert!(
+        meta.contains("basic-battery-pack"),
+        "Expected battery pack name in metadata"
+    );
+    assert!(meta.contains("features"), "Expected features key");
+    assert!(meta.contains("default"), "Expected default feature");
+    assert_data_eq!(
+        meta,
+        str![[r#"
+[package.metadata.battery-pack.basic-battery-pack]
+features = ["default"]
+managed-deps = [
+    "anyhow",
+    "thiserror",
+]
+
+"#]]
+    );
 }
 
 // [verify cli.add.register]

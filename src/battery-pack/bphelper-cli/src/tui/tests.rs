@@ -308,6 +308,11 @@ fn app_renders_loading_screen_without_io() {
         target: LoadingTarget::List { filter: None },
     }));
     let output = render_app_to_string(&mut app, 60, 10);
+    assert!(
+        output.contains("Loading battery packs..."),
+        "Expected loading message in:\n{}",
+        output
+    );
     assert_data_eq!(output, snapbox::file![_]);
 }
 
@@ -341,6 +346,15 @@ fn error_screen_renders_message() {
         retry_target: LoadingTarget::List { filter: None },
     }));
     let output = render_app_to_string(&mut app, 60, 10);
+    assert!(output.contains("Error"), "Expected 'Error' in output");
+    assert!(
+        output.contains("connection refused"),
+        "Expected 'connection refused' in output"
+    );
+    assert!(
+        output.contains("Press Enter or r to retry"),
+        "Expected retry hint in output"
+    );
     assert_data_eq!(output, snapbox::file![_]);
 }
 

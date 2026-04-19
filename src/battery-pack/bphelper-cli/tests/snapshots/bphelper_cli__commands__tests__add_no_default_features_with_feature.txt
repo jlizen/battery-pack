@@ -1,3 +1,0 @@
-[dependencies]
-console = "0.15"
-indicatif = "0.17"
