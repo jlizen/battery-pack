@@ -1,4 +1,0 @@
-[dependencies]
-anyhow = "1"
-eyre = "0.6"
-thiserror = "2"

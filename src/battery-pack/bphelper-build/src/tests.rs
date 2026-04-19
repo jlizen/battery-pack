@@ -1,4 +1,4 @@
-use snapbox::{assert_data_eq, file, str};
+use snapbox::{assert_data_eq, str};
 
 use super::*;
 
@@ -99,6 +99,13 @@ fn test_context_hidden_excluded() {
     let ctx = build_context(&spec, &descriptions, "");
 
     let names: Vec<&str> = ctx.crates.iter().map(|c| c.name.as_str()).collect();
+    // serde, serde_json, cc should be hidden
+    assert!(!names.contains(&"serde"), "serde should be hidden");
+    assert!(
+        !names.contains(&"serde_json"),
+        "serde_json should be hidden"
+    );
+    assert!(!names.contains(&"cc"), "cc should be hidden");
     assert_data_eq!(
         names.join(", "),
         str!["assert_cmd, clap, console, dialoguer, indicatif, predicates"]
@@ -211,7 +218,20 @@ A great battery pack.
 fn test_render_crate_table() {
     let ctx = simple_context();
     let output = render_docs("{{crate-table}}", &ctx).unwrap();
-    assert_data_eq!(output, file![_])
+    assert!(
+        output.contains("| Crate |"),
+        "should render a markdown table"
+    );
+    assert_data_eq!(
+        output,
+        str![[r#"
+| Crate | Version | Description |
+|-------|---------|-------------|
+| [anyhow](https://crates.io/crates/anyhow) | 1 | Flexible concrete Error type |
+| [thiserror](https://crates.io/crates/thiserror) | 2 | derive(Error) |
+
+"#]]
+    )
 }
 
 #[test]
@@ -219,7 +239,22 @@ fn test_render_crate_table() {
 fn test_render_default_template() {
     let ctx = simple_context();
     let output = render_docs("{{readme}}\n\n{{crate-table}}", &ctx).unwrap();
-    assert_data_eq!(output, file![_])
+    assert!(output.contains("# My Pack"), "should contain readme");
+    assert!(output.contains("| Crate |"), "should contain crate table");
+    assert_data_eq!(
+        output,
+        str![[r#"
+# My Pack
+
+A great battery pack.
+
+| Crate | Version | Description |
+|-------|---------|-------------|
+| [anyhow](https://crates.io/crates/anyhow) | 1 | Flexible concrete Error type |
+| [thiserror](https://crates.io/crates/thiserror) | 2 | derive(Error) |
+
+"#]]
+    )
 }
 
 #[test]
@@ -237,7 +272,25 @@ fn test_render_custom_template() {
 {{/each}}"#;
     let output = render_docs(template, &ctx).unwrap();
 
-    assert_data_eq!(output, file![_])
+    assert!(
+        output.contains("test-battery-pack v0.1.0"),
+        "should render package name and version"
+    );
+    assert!(output.contains("**anyhow**"), "should list crates");
+    assert_data_eq!(
+        output,
+        str![[r#"
+# test-battery-pack v0.1.0
+
+A test pack
+
+## Crates
+
+- **anyhow** (1): Flexible concrete Error type
+- **thiserror** (2): derive(Error)
+
+"#]]
+    )
 }
 
 #[test]
@@ -262,7 +315,18 @@ fn test_render_crate_table_empty() {
 fn test_render_crate_table_links() {
     let ctx = simple_context();
     let output = render_docs("{{crate-table}}", &ctx).unwrap();
-    assert_data_eq!(output, file![_]);
+    assert!(output.contains("[anyhow](https://crates.io/crates/anyhow)"));
+    assert!(output.contains("[thiserror](https://crates.io/crates/thiserror)"));
+    assert_data_eq!(
+        output,
+        str![[r#"
+| Crate | Version | Description |
+|-------|---------|-------------|
+| [anyhow](https://crates.io/crates/anyhow) | 1 | Flexible concrete Error type |
+| [thiserror](https://crates.io/crates/thiserror) | 2 | derive(Error) |
+
+"#]]
+    );
 }
 
 #[test]
@@ -272,6 +336,12 @@ fn test_render_no_html_escaping() {
         ..simple_context()
     };
     let output = render_docs("{{readme}}", &ctx).unwrap();
+    // Angle brackets and ampersand should NOT be escaped
+    assert!(!output.contains("&amp;"), "ampersand should not be escaped");
+    assert!(
+        !output.contains("&lt;"),
+        "angle brackets should not be escaped"
+    );
     assert_data_eq!(output, str!["Use `Option<T>` and `Result<T, E>` & more"]);
 }
 
@@ -288,7 +358,30 @@ fn test_full_pipeline_basic() {
     let ctx = build_context(&spec, &descriptions, readme);
     let output = render_docs("{{readme}}\n\n{{crate-table}}", &ctx).unwrap();
 
-    assert_data_eq!(output, file![_]);
+    assert!(
+        output.contains("# basic-battery-pack"),
+        "should contain readme"
+    );
+    assert!(output.contains("[anyhow]"), "should contain crate links");
+    assert!(
+        output.contains("[eyre]"),
+        "should contain optional crate eyre"
+    );
+    assert_data_eq!(
+        output,
+        str![[r#"
+# basic-battery-pack
+
+Error handling crates for Rust.
+
+| Crate | Version | Description |
+|-------|---------|-------------|
+| [anyhow](https://crates.io/crates/anyhow) | 1 | Flexible concrete Error type built on std::error::Error |
+| [eyre](https://crates.io/crates/eyre) | 0.6 | Flexible concrete Error type for easy idiomatic error handling |
+| [thiserror](https://crates.io/crates/thiserror) | 2 | derive(Error) |
+
+"#]]
+    );
 }
 
 // ================================================================
@@ -306,7 +399,25 @@ fn test_template_lib_rs_includes_generated_docs() {
         .unwrap()
         .join("templates/default/src/lib.rs");
     let content = std::fs::read_to_string(&template_dir).unwrap();
-    assert_data_eq!(content, file![_]);
+    assert!(
+        content.contains(r#"include_str!(concat!(env!("OUT_DIR"), "/docs.md"))"#),
+        "template lib.rs must include generated docs from OUT_DIR"
+    );
+    assert_data_eq!(
+        content,
+        str![[r##"
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/docs.md"))]
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn validate_templates() {
+        ::battery_pack::testing::validate_templates(env!("CARGO_MANIFEST_DIR")).unwrap();
+    }
+}
+
+"##]]
+    );
 }
 
 #[test]
@@ -324,7 +435,20 @@ fn test_crate_table_update_is_automatic() {
     // test_render_crate_table).
     let ctx = simple_context();
     let output = render_docs("{{crate-table}}", &ctx).unwrap();
-    assert_data_eq!(output, file![_]);
+    assert!(
+        output.contains("| Crate |"),
+        "crate-table helper must be registered"
+    );
+    assert_data_eq!(
+        output,
+        str![[r#"
+| Crate | Version | Description |
+|-------|---------|-------------|
+| [anyhow](https://crates.io/crates/anyhow) | 1 | Flexible concrete Error type |
+| [thiserror](https://crates.io/crates/thiserror) | 2 | derive(Error) |
+
+"#]]
+    );
 }
 
 // ================================================================
@@ -341,7 +465,33 @@ fn test_full_pipeline_fancy() {
     let ctx = build_context(&spec, &descriptions, readme);
     let output = render_docs("{{readme}}\n\n{{crate-table}}", &ctx).unwrap();
 
-    assert_data_eq!(output, file![_]);
+    // Hidden crates (serde*, cc) must not appear in the table
+    assert!(!output.contains("serde"));
+    assert!(!output.contains("| cc"));
+    // Visible crates must appear
+    assert!(output.contains("[clap]"));
+    assert!(output.contains("[indicatif]"));
+    // Dev-deps should also appear
+    assert!(output.contains("[assert_cmd]"));
+    assert!(output.contains("[predicates]"));
+    assert_data_eq!(
+        output,
+        str![[r#"
+# fancy-battery-pack
+
+CLI tools.
+
+| Crate | Version | Description |
+|-------|---------|-------------|
+| [assert_cmd](https://crates.io/crates/assert_cmd) | 2.0 | Easy command testing |
+| [clap](https://crates.io/crates/clap) | 4 | A simple to use, efficient, and full-featured Command Line Argument Parser |
+| [console](https://crates.io/crates/console) | 0.15 | A terminal and console abstraction for Rust |
+| [dialoguer](https://crates.io/crates/dialoguer) | 0.11 | A command line prompting library |
+| [indicatif](https://crates.io/crates/indicatif) | 0.17 | A progress bar and CLI reporting library |
+| [predicates](https://crates.io/crates/predicates) | 3.0 | Boolean predicate combinators |
+
+"#]]
+    );
 }
 
 // ================================================================
@@ -380,7 +530,27 @@ fn test_generate_docs_writes_output_file() {
     assert!(output_path.exists(), "docs.md must be written to out_dir");
 
     let content = std::fs::read_to_string(&output_path).unwrap();
-    assert_data_eq!(content, file![_]);
+    assert!(
+        content.contains("# Hello"),
+        "output must contain rendered readme"
+    );
+    assert!(
+        content.contains("[anyhow]"),
+        "output must contain crate table"
+    );
+    assert_data_eq!(
+        content,
+        str![[r#"
+# Hello
+
+| Crate | Version | Description |
+|-------|---------|-------------|
+| [anyhow](https://crates.io/crates/anyhow) | 1 | Flexible concrete Error type built on std::error::Error |
+| [eyre](https://crates.io/crates/eyre) | 0.6 | Flexible concrete Error type for easy idiomatic error handling |
+| [thiserror](https://crates.io/crates/thiserror) | 2 | derive(Error) |
+
+"#]]
+    );
 }
 
 #[test]

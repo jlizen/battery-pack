@@ -1,9 +1,0 @@
-[
-    UpdatePack {
-        name: "db-battery-pack",
-        add_crates: [],
-        remove_crates: [
-            "sqlx",
-        ],
-    },
-]

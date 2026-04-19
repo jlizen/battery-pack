@@ -1,3 +1,0 @@
-[dependencies]
-anyhow = "1"
-thiserror = "2"

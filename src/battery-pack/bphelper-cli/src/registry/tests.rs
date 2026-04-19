@@ -17,7 +17,7 @@
 //   - cli.list.filter          — filters results by name pattern
 
 use super::CrateSource;
-use snapbox::{assert_data_eq, file, str};
+use snapbox::{assert_data_eq, str};
 use std::path::PathBuf;
 
 fn fixtures_dir() -> PathBuf {
@@ -47,7 +47,26 @@ fn list_discovers_local_battery_packs() {
     let source = CrateSource::Local(fixtures_dir());
     let packs = super::fetch_battery_pack_list(&source, None).unwrap();
     let formatted = format_summaries(&packs);
-    assert_data_eq!(formatted, file![_]);
+    assert!(
+        formatted.contains("basic-battery-pack"),
+        "Expected basic-battery-pack"
+    );
+    assert!(
+        formatted.contains("fancy-battery-pack"),
+        "Expected fancy-battery-pack"
+    );
+    assert!(
+        formatted.contains("managed-battery-pack"),
+        "Expected managed-battery-pack"
+    );
+    assert_data_eq!(
+        formatted,
+        str![[r#"
+basic-battery-pack 0.1.0 -- A simple test battery pack
+broken-battery-pack 0.1.0 -- A deliberately broken battery pack for testing validation
+fancy-battery-pack 0.2.0 -- A feature-rich test battery pack
+managed-battery-pack 0.2.0 -- A test battery pack for bp-managed resolution"#]]
+    );
 }
 
 // [verify cli.list.filter]
@@ -164,7 +183,37 @@ managed-battery-pack = { features = ["default"] }
 
     let result = resolve_with_fixture(cargo_toml, &bp_root).unwrap();
 
-    assert_data_eq!(result, file![_]);
+    assert!(
+        result.contains(r#"name = "my-app""#),
+        "Expected package name"
+    );
+    assert!(
+        result.contains(r#"anyhow = "1""#),
+        "Expected anyhow version"
+    );
+    assert!(
+        result.contains(r#"clap = { version = "4""#),
+        "Expected clap version"
+    );
+    assert_data_eq!(
+        result,
+        str![[r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[build-dependencies]
+managed-battery-pack = "0.2.0"
+
+[package.metadata.battery-pack]
+managed-battery-pack = { features = ["default"] }
+
+"#]]
+    );
 }
 
 #[test]
@@ -189,7 +238,30 @@ managed-battery-pack = { features = ["default"] }
 
     let result = resolve_with_fixture(cargo_toml, &bp_root).unwrap();
 
-    assert_data_eq!(result, file![_]);
+    assert!(result.contains(r#"anyhow = "1""#), "Expected anyhow");
+    assert!(result.contains(r#"insta = "1.34""#), "Expected insta");
+    assert!(result.contains(r#"cc = "1.0""#), "Expected cc");
+    assert_data_eq!(
+        result,
+        str![[r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1"
+
+[dev-dependencies]
+insta = "1.34"
+
+[build-dependencies]
+cc = "1.0"
+
+[package.metadata.battery-pack]
+managed-battery-pack = { features = ["default"] }
+
+"#]]
+    );
 }
 
 #[test]
@@ -230,7 +302,25 @@ managed-battery-pack = { features = ["default"] }
 "#;
 
     let result = resolve_with_fixture(cargo_toml, &bp_root).unwrap();
-    assert_data_eq!(result, file![_]);
+    assert!(
+        result.contains(r#"serde = "1.0.200""#),
+        "explicit version should be untouched"
+    );
+    assert_data_eq!(
+        result,
+        str![[r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0.200"
+
+[package.metadata.battery-pack]
+managed-battery-pack = { features = ["default"] }
+
+"#]]
+    );
 }
 
 #[test]
@@ -268,7 +358,19 @@ serde = "1"
 "#;
 
     let result = resolve_with_fixture(cargo_toml, &bp_root).unwrap();
-    assert_data_eq!(result, file![_]);
+    assert!(result.contains(r#"serde = "1""#), "should be unchanged");
+    assert_data_eq!(
+        result,
+        str![[r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+
+[dependencies]
+serde = "1"
+
+"#]]
+    );
 }
 
 #[test]
@@ -337,5 +439,28 @@ managed-battery-pack = { features = ["default"] }
 
     let result = resolve_with_fixture(cargo_toml, &bp_root).unwrap();
 
-    assert_data_eq!(result, file![_]);
+    assert!(result.contains(r#"anyhow = "1""#), "Expected anyhow");
+    assert!(
+        result.contains(r#"clap = { version = "4""#),
+        "Expected clap"
+    );
+    assert_data_eq!(
+        result,
+        str![[r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[build-dependencies]
+managed-battery-pack = "0.2.0"
+
+[package.metadata.battery-pack]
+managed-battery-pack = { features = ["default"] }
+
+"#]]
+    );
 }

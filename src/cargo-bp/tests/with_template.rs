@@ -2,7 +2,7 @@
 //! whose inner template can itself generate a valid project.
 
 use assert_cmd::Command;
-use snapbox::{assert_data_eq, file};
+use snapbox::{assert_data_eq, file, str};
 use std::path::Path;
 
 fn cargo_bp() -> Command {
@@ -63,20 +63,47 @@ fn with_template_two_level_generation() {
 
     // Verify outer battery pack content
     let bp_cargo = std::fs::read_to_string(bp_dir.join("Cargo.toml")).unwrap();
+    assert!(bp_cargo.contains("name = \"http-battery-pack\""));
+    assert!(bp_cargo.contains("description = \"HTTP utilities\""));
     assert_data_eq!(bp_cargo, file![_]);
 
     let bp_readme = std::fs::read_to_string(bp_dir.join("README.md")).unwrap();
+    assert!(bp_readme.contains("# http-battery-pack"));
+    assert!(bp_readme.contains("HTTP utilities"));
     assert_data_eq!(bp_readme, file![_]);
 
     let bp_lib = std::fs::read_to_string(bp_dir.join("src/lib.rs")).unwrap();
+    assert!(bp_lib.contains("include_str!"));
     assert_data_eq!(bp_lib, file![_]);
 
     // Verify inner template has literal MiniJinja syntax (not rendered)
     let inner_cargo = std::fs::read_to_string(bp_dir.join("templates/default/Cargo.toml")).unwrap();
-    assert_data_eq!(inner_cargo, file![_]);
+    assert!(inner_cargo.contains("{{ project_name }}"));
+    assert!(inner_cargo.contains("http-battery-pack"));
+    assert_data_eq!(
+        inner_cargo,
+        str![[r#"
+[package]
+name = "{{ project_name }}"
+version = "0.1.0"
+edition = "2024"
+description = "{{ project_description }}"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Add the curated dependencies your battery pack provides
+
+[build-dependencies]
+http-battery-pack.bp-managed = true
+
+[package.metadata.battery-pack]
+http-battery-pack = { features = ["default"] }
+"#]]
+    );
 
     let inner_build = std::fs::read_to_string(bp_dir.join("templates/default/build.rs")).unwrap();
-    assert_data_eq!(inner_build, file![_]);
+    assert!(inner_build.contains("fn main()"));
+    assert_data_eq!(inner_build, str!["fn main() {}"]);
 
     // Step 2: patch deps so validate can resolve against local workspace
     write_patches(&bp_dir);
