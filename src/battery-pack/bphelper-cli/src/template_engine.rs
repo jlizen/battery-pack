@@ -394,27 +394,33 @@ fn build_jinja_env(
     // Register pin_github_action — reads from the global cache (populated by prefetch or on-demand).
     env.add_function(
         "pin_github_action",
-        |owner_repo: &str, tag: &str| -> String {
+        |owner_repo: &str, tag: &str, subpath: Option<&str>| -> String {
             let key = (owner_repo.to_string(), tag.to_string());
             let mut cache = PIN_GITHUB_ACTION_CACHE.lock().unwrap();
-            if let Some(cached) = cache.get(&key) {
-                return cached.clone();
-            }
-            // On-demand resolution for callers that skip prefetch (tests, direct build_jinja_env).
-            let result =
-                resolve_latest_tag(owner_repo, tag).or_else(|_| resolve_ref(owner_repo, tag));
-            let output = match result {
-                Ok((sha, resolved_tag)) => format!("{owner_repo}@{sha} # {resolved_tag}"),
-                Err(_) => {
-                    let url = format!("https://github.com/{owner_repo}.git");
-                    format!(
-                        "{owner_repo}@could-not-resolve-git-sha-for-{tag} \
-                     # TODO: run 'git ls-remote --tags {url} \"refs/tags/{tag}.*\"' and pin"
-                    )
-                }
+            let resolved = if let Some(cached) = cache.get(&key) {
+                cached.clone()
+            } else {
+                let result =
+                    resolve_latest_tag(owner_repo, tag).or_else(|_| resolve_ref(owner_repo, tag));
+                let output = match result {
+                    Ok((sha, resolved_tag)) => format!("{owner_repo}@{sha} # {resolved_tag}"),
+                    Err(_) => {
+                        let url = format!("https://github.com/{owner_repo}.git");
+                        format!(
+                            "{owner_repo}@could-not-resolve-git-sha-for-{tag} \
+                         # TODO: run 'git ls-remote --tags {url} \"refs/tags/{tag}.*\"' and pin"
+                        )
+                    }
+                };
+                cache.insert(key, output.clone());
+                output
             };
-            cache.insert(key, output.clone());
-            output
+            // Insert subpath between owner/repo and @sha
+            if let Some(sub) = subpath {
+                resolved.replacen(owner_repo, &format!("{owner_repo}/{sub}"), 1)
+            } else {
+                resolved
+            }
         },
     );
 

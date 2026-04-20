@@ -10,4 +10,4 @@
       - uses: {{ pin_github_action("taiki-e/install-action", "v2") }}
         with:
           tool: cargo-hack
-      - run: cargo hack check --rust-version --workspace --all-targets --locked
+      - run: cargo hack check --rust-version --workspace --all-targets --ignore-private --locked

@@ -18,7 +18,8 @@
           cargo clippy --workspace --all-features --all-targets --message-format=json
           | clippy-sarif | tee clippy-results.sarif | sarif-fmt
         continue-on-error: true
-      - uses: {{ pin_github_action("github/codeql-action", "v3") }}
+      - name: Upload SARIF
+        uses: {{ pin_github_action("github/codeql-action", "v3", "upload-sarif") }}
         with:
           sarif_file: clippy-results.sarif
           wait-for-processing: true
