@@ -19,7 +19,9 @@ env:
 
 jobs:
 {% include "snippets/github/jobs/fmt.yml" %}
+{%- if not (all or clippy_sarif) %}
 {% include "snippets/github/jobs/clippy.yml" %}
+{%- endif %}
 {% include "snippets/github/jobs/warnings.yml" %}
 {% include "snippets/github/jobs/docsrs.yml" %}
 {% include "snippets/github/jobs/build.yml" %}
