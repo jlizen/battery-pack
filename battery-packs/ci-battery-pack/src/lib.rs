@@ -50,6 +50,7 @@ mod tests {
 .github/workflows/audit.yml
 .github/workflows/ci.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 Cargo.toml
 README.md
 deny.toml
@@ -73,6 +74,7 @@ src/lib.rs
 .github/workflows/fuzz-nightly.yml
 .github/workflows/mdbook.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 .github/workflows/stress-test.yml
 Cargo.toml
 README.md
@@ -104,6 +106,7 @@ xtask/src/main.rs
 .github/workflows/ci.yml
 .github/workflows/fuzz-nightly.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 Cargo.toml
 README.md
 deny.toml
@@ -126,6 +129,7 @@ src/lib.rs
 .github/workflows/ci.yml
 .github/workflows/fuzz-nightly.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 Cargo.toml
 README.md
 _typos.toml
@@ -148,6 +152,7 @@ src/lib.rs
 .github/workflows/audit.yml
 .github/workflows/ci.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 Cargo.toml
 README.md
 benches/example_bench.rs
@@ -168,6 +173,7 @@ src/lib.rs
 .github/workflows/audit.yml
 .github/workflows/ci.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 .github/workflows/stress-test.yml
 Cargo.toml
 README.md
@@ -189,6 +195,7 @@ src/lib.rs
 .github/workflows/ci.yml
 .github/workflows/mdbook.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 Cargo.toml
 README.md
 book.toml
@@ -211,6 +218,7 @@ src/lib.rs
 .github/workflows/audit.yml
 .github/workflows/ci.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 Cargo.toml
 README.md
 _typos.toml
@@ -232,6 +240,7 @@ src/lib.rs
 .github/workflows/audit.yml
 .github/workflows/ci.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 Cargo.toml
 README.md
 deny.toml
@@ -598,12 +607,14 @@ src/main.rs
 .github/workflows/build-binaries.yml
 .github/workflows/ci.yml
 .github/workflows/release.yml
+.github/workflows/rust-next.yml
 Cargo.toml
 README.md
 deny.toml
 release-plz.toml
 src/lib.rs
-src/main.rs"#]]
+src/main.rs
+"#]]
         );
     }
 }
