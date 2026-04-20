@@ -63,6 +63,7 @@ The `full` template generates a stub Rust project (Cargo.toml, src/lib.rs, READM
 | `spellcheck` | false | [typos](https://github.com/crate-ci/typos) config + workflow | |
 | `xtask` | false | [cargo-xtask](https://github.com/matklad/cargo-xtask) scaffold with codegen `--check` | `xshell`, `xflags` |
 | `mutation_testing` | false | [cargo-mutants](https://mutants.rs/) mutation testing | |
+| `clippy_sarif` | false | Clippy with GitHub PR annotations via [SARIF](https://github.com/psastras/sarif-rs) | |
 
 ### SHA pinning
 
@@ -96,6 +97,10 @@ See [release-plz docs](https://release-plz.dev/docs) for more.
 3. Add your project slug as a `BENCHER_PROJECT` repo variable
 
 See [Bencher docs](https://bencher.dev/docs) for more.
+
+### Clippy SARIF (if clippy_sarif enabled)
+
+Works automatically on public repos. For private repos, enable Code Scanning at Settings → Security → Code security.
 
 ## License
 

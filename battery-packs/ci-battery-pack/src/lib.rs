@@ -266,6 +266,7 @@ xtask/src/main.rs
             ("xtask", "true"),
             ("binary_release", "true"),
             ("mutation_testing", "true"),
+            ("clippy_sarif", "true"),
         ]);
         assert_eq!(all_files, individual_files);
     }

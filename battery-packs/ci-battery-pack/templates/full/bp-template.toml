@@ -64,6 +64,11 @@ type = "bool"
 prompt = "Include mutation testing (cargo-mutants)?"
 default = "false"
 
+[placeholders.clippy_sarif]
+type = "bool"
+prompt = "Include clippy SARIF integration (PR annotations)?"
+default = "false"
+
 [placeholders.repository]
 type = "string"
 prompt = "Repository URL (leave empty for GitHub default)"
