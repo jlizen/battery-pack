@@ -1,5 +1,6 @@
 {%- if ci_platform == "github" -%}
 # Builds cross-platform binaries and uploads to GitHub Releases.
+# Binaries are discoverable by cargo-binstall (https://github.com/cargo-bins/cargo-binstall).
 # Triggered automatically when release-plz publishes a release.
 # workflow_dispatch lets you build binaries manually without a release.
 name: Build Binaries

@@ -1,5 +1,6 @@
 {%- if ci_platform == "github" -%}
 {%- if ci_platform == "github" -%}
+# https://rust-lang.github.io/mdBook/
 name: Deploy mdBook
 
 on:

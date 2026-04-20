@@ -1,3 +1,4 @@
+  # Dedicated warnings check so test failures are visible even with warnings
   warnings:
     runs-on: ubuntu-latest
     env:
