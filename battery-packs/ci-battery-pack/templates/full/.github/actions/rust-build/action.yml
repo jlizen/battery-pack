@@ -26,6 +26,8 @@ runs:
 
     - name: Test
       shell: bash
+      # For faster parallel test execution, consider nextest (https://nexte.st/).
+      # Note: nextest has non-standard behaviors — review before adopting.
       run: cargo test --verbose {% raw %}${{ inputs.flags }}{% endraw %}
 
     # cargo test doesn't run doctests with --no-run, run them separately

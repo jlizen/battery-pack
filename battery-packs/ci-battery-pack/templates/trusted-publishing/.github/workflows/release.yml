@@ -1,4 +1,9 @@
 {%- if ci_platform == "github" -%}
+# release-plz: automated releases to crates.io (https://release-plz.dev/docs)
+# Setup: configure trusted publishing on crates.io
+#   https://doc.rust-lang.org/cargo/reference/registry-authentication.html#trusted-publishing
+# If using binary_release, also add a RELEASE_PLZ_TOKEN PAT (contents + pull-requests: write)
+#   https://github.com/settings/personal-access-tokens/new
 name: Release
 
 on:
