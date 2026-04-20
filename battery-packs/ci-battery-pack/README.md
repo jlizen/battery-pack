@@ -1,6 +1,6 @@
 # ci-battery-pack
 
-A [battery pack](https://crates.io/crates/battery-pack) for CI/CD workflows in Rust projects — the kind of thing you'd copy from tokio or hyper, but generated fresh with pinned SHAs and your project's MSRV.
+A [battery pack](https://crates.io/crates/battery-pack) for CI/CD workflows in Rust projects. This is the kind of thing you'd copy from tokio or hyper, but generated fresh with pinned SHAs and your project's MSRV.
 
 Currently supports GitHub Actions. Someday there will be more supported platforms.
 
