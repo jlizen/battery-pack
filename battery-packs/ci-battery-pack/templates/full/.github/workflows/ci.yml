@@ -15,12 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUSTFLAGS: "-Dwarnings"
   CARGO_TERM_COLOR: always
 
 jobs:
 {% include "snippets/github/jobs/fmt.yml" %}
 {% include "snippets/github/jobs/clippy.yml" %}
+{% include "snippets/github/jobs/warnings.yml" %}
+{% include "snippets/github/jobs/docsrs.yml" %}
 {% include "snippets/github/jobs/build.yml" %}
 {% include "snippets/github/jobs/features.yml" %}
 {% include "snippets/github/jobs/msrv.yml" %}

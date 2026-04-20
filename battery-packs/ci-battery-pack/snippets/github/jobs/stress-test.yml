@@ -7,5 +7,6 @@
       - uses: {{ pin_github_action("taiki-e/install-action", "v2") }}
         with:
           tool: nextest
+      # nextest is used here for --stress-duration (not available in cargo test)
       - run: cargo nextest run --all-features --stress-duration '5m'
         timeout-minutes: 10
