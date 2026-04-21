@@ -321,12 +321,12 @@ Templates can also be applied to existing projects with `cargo bp add <pack> -t 
 
 When merged into an existing project, `cargo bp` handles files by type:
 
-- **`Cargo.toml`**: dependencies are merged (versions upgraded if behind, features unioned)
-- **Other `.toml`**: sections and keys inserted if absent, preserved if present
+- **`Cargo.toml`**: dependencies are merged (versions upgraded if behind, missing features added)
+- **Other `.toml`**: new sections and keys added, existing ones left alone
 - **YAML**: top-level keys merged additively (new jobs added, existing ones preserved)
 - **Other files**: the user is prompted to skip or overwrite if they already exist
 
-Note: YAML merges round-trip through a parser, so comments in existing YAML files are lost on merge. Use unique workflow filenames (e.g., `typos.yml` instead of `ci.yml`) so they don't conflict with the user's existing workflows.
+Note: YAML merges don't preserve comments in existing files. For YAML, only `jobs`, `on`, and `permissions` are deep-merged; other top-level keys are atomic, so if the key already exists, the user's value wins. To avoid conflicts, use unique workflow filenames (e.g., `typos.yml` instead of `ci.yml`).
 
 To help users with steps that can't be automated (like adding `mod` declarations or installing tools), declare hints in your `bp-template.toml`:
 
@@ -342,6 +342,6 @@ Hints are printed after the merge summary. They're only shown for `cargo bp add 
 
 Tips for writing merge-friendly templates:
 
-- Keep template `Cargo.toml` files minimal. Only include dependencies the template actually needs. The merge will add them to the user's existing deps without removing anything.
+- Keep template `Cargo.toml` files minimal; only include dependencies the template actually needs.
 - Use `bp-managed = true` for dependencies so versions stay current with the battery pack spec.
 - Use `[[hints]]` for anything the user needs to do manually after the merge.
