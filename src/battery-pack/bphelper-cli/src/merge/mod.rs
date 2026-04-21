@@ -55,6 +55,8 @@ pub(crate) enum FileResult {
     Skipped(String),
     /// File was overwritten (user chose to overwrite).
     Overwritten(String),
+    /// File was unchanged (merge produced identical content).
+    Unchanged(String),
 }
 
 /// Options for applying rendered template files to an existing project.
@@ -246,7 +248,7 @@ fn resolve_structured_merge(
 ) -> Result<FileResult> {
     // No changes needed.
     if ctx.new_content == ctx.existing {
-        return Ok(FileResult::Skipped(ctx.rel_path.to_string()));
+        return Ok(FileResult::Unchanged(ctx.rel_path.to_string()));
     }
 
     let diff = unified_diff(ctx.existing, ctx.new_content, ctx.rel_path);
@@ -601,6 +603,9 @@ pub(crate) fn print_summary(results: &[FileResult]) {
                 eprintln!("  {} {}", style("overwrite").red(), path);
                 overwritten += 1;
             }
+            FileResult::Unchanged(path) => {
+                eprintln!("  {} {}", style("unchanged").dim(), path);
+            }
         }
     }
 
@@ -618,7 +623,9 @@ pub(crate) fn print_summary(results: &[FileResult]) {
     if overwritten > 0 {
         parts.push(format!("{overwritten} overwritten"));
     }
-    eprintln!("{}", parts.join(", "));
+    if !parts.is_empty() {
+        eprintln!("{}", parts.join(", "));
+    }
 }
 
 #[cfg(test)]
