@@ -65,6 +65,7 @@ fn run_preview(opts: ShowOpts<'_>) -> Result<()> {
     let line_count = content.lines.len() as u16;
     let app = App {
         source: opts.source,
+        pack_path: opts.path.map(|s| s.to_string()),
         screen: Screen::Preview(PreviewScreen {
             content,
             battery_pack_name: crate_name,
@@ -89,6 +90,8 @@ fn run_preview(opts: ShowOpts<'_>) -> Result<()> {
 
 struct App {
     source: CrateSource,
+    /// The `--path` value, if the TUI was launched with a direct battery pack path.
+    pack_path: Option<String>,
     screen: Screen,
     should_quit: bool,
     pending_action: Option<PendingAction>,
@@ -326,6 +329,7 @@ enum PendingAction {
         battery_pack: String,
         template: String,
         source: Option<PathBuf>,
+        pack_path: Option<String>,
     },
 }
 
@@ -353,6 +357,7 @@ impl App {
         let (in_project, installed_bp_names) = detect_project_state();
         Self {
             source,
+            pack_path: None,
             screen: Screen::Loading(LoadingState {
                 message: "Loading battery packs...".to_string(),
                 target: LoadingTarget::List { filter },
@@ -368,6 +373,7 @@ impl App {
         let (in_project, installed_bp_names) = detect_project_state();
         Self {
             source,
+            pack_path: path.map(|s| s.to_string()),
             screen: Screen::Loading(LoadingState {
                 message: format!("Loading {}...", name),
                 target: LoadingTarget::Detail {
@@ -563,6 +569,7 @@ impl App {
                 battery_pack,
                 template,
                 source,
+                pack_path,
             } => {
                 let mut cmd = std::process::Command::new("cargo");
                 cmd.arg("bp");
@@ -570,6 +577,9 @@ impl App {
                     cmd.args(["--crate-source", &path.to_string_lossy()]);
                 }
                 cmd.args(["add", battery_pack, "-t", template]);
+                if let Some(path) = pack_path {
+                    cmd.args(["--path", path]);
+                }
                 let status = cmd.status()?;
 
                 if status.success() {
@@ -909,6 +919,7 @@ impl App {
                     battery_pack: detail.short_name.clone(),
                     template,
                     source: source_path,
+                    pack_path: self.pack_path.clone(),
                 });
                 self.screen = Screen::Detail(DetailScreen {
                     detail: detail.clone(),

@@ -120,7 +120,7 @@ The merge is format-aware:
 | `.yml` / `.yaml` files | Write | Merge: top-level keys added, existing keys left alone |
 | Everything else | Write | You're prompted to skip, overwrite, or view a diff |
 
-For TOML and YAML conflicts, you can accept the merge, skip it, or open the result in `$EDITOR` to modify before writing. For other files, you can skip, overwrite, or view a diff. Both prompt types include batch options ("skip all", "accept all" / "overwrite all") so you don't get prompted repeatedly.
+For TOML and YAML conflicts, you can accept the merge, skip it, or open the result in `$EDITOR` to modify before writing. For other files, you can skip, overwrite, or view a diff. Both prompt types include batch options ("skip all", "accept all" / "overwrite all") so you don't get prompted repeatedly. Each option has a single-key shortcut (shown in brackets) so you don't need to arrow through a menu.
 
 Flags that change the behavior:
 
