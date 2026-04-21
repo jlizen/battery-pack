@@ -101,6 +101,40 @@ cargo bp new cli --name my-app -d description="My CLI tool"
 
 You can also create new projects from the TUI's "New project" tab.
 
+## Merging a template into an existing project
+
+Some battery packs include small, single-purpose templates designed to augment an existing project rather than scaffold a new one. For example, `ci-battery-pack` has templates for spellcheck, fuzzing, benchmarks, and more. You can merge these into your project with `cargo bp add -t`:
+
+```bash
+cargo bp add ci -t spellcheck
+cargo bp add ci -t fuzzing -d ci_platform=github
+cargo bp add ci -t trusted-publishing
+```
+
+The merge is format-aware:
+
+| File type | New file | Existing file |
+|-----------|----------|---------------|
+| `Cargo.toml` | Write | Merge: deps upgraded if behind, features unioned |
+| Other `.toml` files | Write | Merge: sections/keys inserted if absent, preserved if present |
+| `.yml` / `.yaml` files | Write | Merge: top-level keys added, existing keys left alone |
+| Everything else | Write | You're prompted to skip, overwrite, or view a diff |
+
+For TOML and YAML conflicts, you can accept the merge, skip it, or open the result in `$EDITOR` to modify before writing. For other files, you can skip, overwrite, or view a diff. Both prompt types include batch options ("skip all", "accept all" / "overwrite all") so you don't get prompted repeatedly.
+
+Flags that change the behavior:
+
+- **`--overwrite`**: overwrites other files without prompting. TOML and YAML files are always merged, never overwritten.
+- **`-N` (non-interactive)**: skips other-file conflicts unless `--overwrite` is also passed. TOML and YAML merges apply automatically.
+
+If your working tree has uncommitted changes, `cargo bp` warns before proceeding. In non-interactive mode, it refuses unless `--overwrite` is passed. Commit or stash first for a clean undo path.
+
+The project name for template variables is inferred from your `Cargo.toml` `[package].name`.
+
+Some templates print follow-up instructions after the merge (e.g., "add `mod errors;` to your lib.rs") to guide you through manual steps.
+
+In the TUI, you can merge templates by selecting one in the detail view and pressing `u` (Use in project).
+
 ## Adding a battery pack
 
 ### Basic add
