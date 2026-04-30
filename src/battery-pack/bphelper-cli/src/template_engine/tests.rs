@@ -802,6 +802,7 @@ fn preview_template_resolves_and_renders() {
         template: "default",
         path: None,
         source: &source,
+        defines: BTreeMap::new(),
     };
 
     let (crate_name, files) = preview_template(&opts).unwrap();
