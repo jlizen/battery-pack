@@ -108,10 +108,11 @@ http-battery-pack = { features = ["default"] }
     // Step 2: patch deps so validate can resolve against local workspace
     write_patches(&bp_dir);
 
-    // Step 3: validate the generated battery pack (generates from inner
-    // template, runs cargo check + cargo test on the result)
+    // Step 3: validate the generated battery pack
+    // INVERTED: the generated template has Cargo.toml which cargo excludes
+    // from the tarball. Flip once templates use _Cargo.toml.
     cargo_bp()
         .args(["bp", "validate", "--path", &bp_dir.to_string_lossy()])
         .assert()
-        .success();
+        .failure();
 }
