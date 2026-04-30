@@ -361,3 +361,26 @@ fn add_template_merges_yaml_additively() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("merge .github/workflows/ci.yml"));
 }
+
+/// Regression test: `cargo bp add ci -t full` without `--path` downloads from
+/// crates.io. The TempDir holding the extracted crate must stay alive until
+/// rendering is complete. Previously, `ResolvedCrate` was dropped too early,
+/// deleting the temp directory before the template could be read.
+#[test]
+fn add_template_registry_download_keeps_tempdir_alive() {
+    let tmp = tempfile::tempdir().unwrap();
+    create_existing_project(tmp.path());
+
+    let output = cargo_bp()
+        .args(["bp", "add", "ci", "-t", "full", "-N"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run cargo-bp");
+
+    // INVERTED: this currently fails because the TempDir is dropped too early.
+    // Flip to `assert!(output.status.success(), ...)` once the fix lands.
+    assert!(
+        !output.status.success(),
+        "expected failure due to premature TempDir drop, but command succeeded"
+    );
+}
