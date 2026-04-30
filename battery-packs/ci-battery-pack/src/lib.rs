@@ -4,27 +4,30 @@
 mod tests {
     use ::battery_pack::testing::PreviewBuilder;
 
-    // Note: validate_templates is not used because it runs cargo check on ALL
-    // templates, but standalone templates (benchmarks, fuzzing, etc.) are partial
-    // scaffolds without a Cargo.toml. The full template is validated end-to-end
-    // via the test repo: https://github.com/jlizen/ci-battery-pack-test/actions
-    use snapbox::{assert_data_eq, str};
+    #[test]
+    fn validate_templates() {
+        ::battery_pack::testing::validate_templates(env!("CARGO_MANIFEST_DIR")).unwrap();
+    }
+
+    use snapbox::{assert_data_eq, file, str};
 
     fn file_list(defines: &[(&str, &str)]) -> String {
-        let mut builder = PreviewBuilder::new(env!("CARGO_MANIFEST_DIR"))
-            .template("templates/full")
-            .define("ci_platform", "github")
-            .define("repo_owner", "test-owner");
-        for (k, v) in defines {
-            builder = builder.define(*k, *v);
-        }
-        let files = builder.preview().unwrap();
+        let files = render(defines);
         let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         paths.sort();
         paths.join("\n")
     }
 
     fn get_content(defines: &[(&str, &str)], path: &str) -> String {
+        let files = render(defines);
+        files
+            .into_iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("file not found: {path}"))
+            .content
+    }
+
+    fn render(defines: &[(&str, &str)]) -> Vec<::battery_pack::testing::PreviewFile> {
         let mut builder = PreviewBuilder::new(env!("CARGO_MANIFEST_DIR"))
             .template("templates/full")
             .define("ci_platform", "github")
@@ -32,12 +35,44 @@ mod tests {
         for (k, v) in defines {
             builder = builder.define(*k, *v);
         }
-        let files = builder.preview().unwrap();
-        files
-            .into_iter()
-            .find(|f| f.path == path)
-            .unwrap_or_else(|| panic!("file not found: {path}"))
-            .content
+        builder.preview().unwrap()
+    }
+
+    /// Render a template and concatenate all files into a single string with
+    /// `--- path ---` headers, for snapshot comparison.
+    fn merged_snapshot(defines: &[(&str, &str)]) -> String {
+        let mut files = render(defines);
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let mut out = String::new();
+        for file in &files {
+            out.push_str(&format!("--- {} ---\n", file.path));
+            let trimmed = file.content.trim_end();
+            out.push_str(trimmed);
+            out.push_str(&format!("\n--- end {} ---\n\n", file.path));
+        }
+        out
+    }
+
+    fn standalone_merged_snapshot(template: &str) -> String {
+        let files = PreviewBuilder::new(env!("CARGO_MANIFEST_DIR"))
+            .template(format!("templates/{template}"))
+            .define("ci_platform", "github")
+            .define("repo_owner", "test-owner")
+            .preview()
+            .unwrap();
+
+        let mut sorted: Vec<_> = files.iter().collect();
+        sorted.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let mut out = String::new();
+        for file in &sorted {
+            out.push_str(&format!("--- {} ---\n", file.path));
+            let trimmed = file.content.trim_end();
+            out.push_str(trimmed);
+            out.push_str(&format!("\n--- end {} ---\n\n", file.path));
+        }
+        out
     }
 
     #[test]
@@ -638,6 +673,104 @@ src/main.rs
         assert!(
             ci.content.contains("github/codeql-action/upload-sarif@"),
             "should contain subpath in action reference"
+        );
+    }
+
+    // -- Merged snapshot tests --
+    // Each test renders a template configuration and snapshots ALL rendered
+    // files concatenated with `--- path ---` headers. SHAs and MSRV are
+    // masked with [..] in the snapshot files.
+
+    #[test]
+    fn snapshot_minimalist() {
+        assert_data_eq!(merged_snapshot(&[]), file!["snapshots/minimalist.txt"]);
+    }
+
+    #[test]
+    fn snapshot_maximalist() {
+        assert_data_eq!(
+            merged_snapshot(&[("all", "true")]),
+            file!["snapshots/maximalist.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_benchmarks() {
+        assert_data_eq!(
+            standalone_merged_snapshot("benchmarks"),
+            file!["snapshots/standalone_benchmarks.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_fuzzing() {
+        assert_data_eq!(
+            standalone_merged_snapshot("fuzzing"),
+            file!["snapshots/standalone_fuzzing.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_stress_test() {
+        assert_data_eq!(
+            standalone_merged_snapshot("stress-test"),
+            file!["snapshots/standalone_stress_test.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_mdbook() {
+        assert_data_eq!(
+            standalone_merged_snapshot("mdbook"),
+            file!["snapshots/standalone_mdbook.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_spellcheck() {
+        assert_data_eq!(
+            standalone_merged_snapshot("spellcheck"),
+            file!["snapshots/standalone_spellcheck.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_xtask() {
+        assert_data_eq!(
+            standalone_merged_snapshot("xtask"),
+            file!["snapshots/standalone_xtask.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_binary_release() {
+        assert_data_eq!(
+            standalone_merged_snapshot("binary-release"),
+            file!["snapshots/standalone_binary_release.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_trusted_publishing() {
+        assert_data_eq!(
+            standalone_merged_snapshot("trusted-publishing"),
+            file!["snapshots/standalone_trusted_publishing.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_mutation_testing() {
+        assert_data_eq!(
+            standalone_merged_snapshot("mutation-testing"),
+            file!["snapshots/standalone_mutation_testing.txt"]
+        );
+    }
+
+    #[test]
+    fn snapshot_standalone_clippy_sarif() {
+        assert_data_eq!(
+            standalone_merged_snapshot("clippy-sarif"),
+            file!["snapshots/standalone_clippy_sarif.txt"]
         );
     }
 }
