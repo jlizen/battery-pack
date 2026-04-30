@@ -372,15 +372,14 @@ fn add_template_registry_download_keeps_tempdir_alive() {
     create_existing_project(tmp.path());
 
     let output = cargo_bp()
-        .args(["bp", "add", "ci", "-t", "full", "-N"])
+        .args(["bp", "add", "ci", "-t", "spellcheck", "-N"])
         .current_dir(tmp.path())
         .output()
         .expect("failed to run cargo-bp");
 
-    // INVERTED: this currently fails because the TempDir is dropped too early.
-    // Flip to `assert!(output.status.success(), ...)` once the fix lands.
     assert!(
-        !output.status.success(),
-        "expected failure due to premature TempDir drop, but command succeeded"
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
