@@ -606,11 +606,14 @@ fn add_template(opts: AddTemplateOpts<'_>) -> Result<()> {
     let crate_name = resolve_crate_name(opts.battery_pack);
 
     // Resolve the battery pack directory.
+    // Keep `_resolved` alive so its TempDir is not dropped before we finish
+    // reading from the extracted crate directory.
+    let _resolved;
     let crate_dir = if let Some(local_path) = opts.path_override {
         PathBuf::from(local_path)
     } else {
-        let resolved = crate::registry::resolve_crate_dir(opts.battery_pack, None, opts.source)?;
-        resolved.dir
+        _resolved = crate::registry::resolve_crate_dir(opts.battery_pack, None, opts.source)?;
+        _resolved.dir.clone()
     };
 
     // Read template metadata and resolve which template to use.
